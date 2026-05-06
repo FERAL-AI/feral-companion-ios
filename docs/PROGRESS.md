@@ -28,10 +28,10 @@ Tracks the build of this app from scaffold to demo-ready.
 
 Phase 1 + 2: app builds, connects to brain, no UI yet. End-of-day status check:
 
-- [ ] `xcodegen generate` produces `FeralCompanion.xcodeproj` cleanly
-- [ ] `xcodebuild -scheme FeralCompanion -destination 'generic/platform=iOS' build` succeeds (or `-destination 'platform=iOS Simulator,name=iPhone 16'`)
-- [ ] App launches on iPhone simulator and shows the Phase-1 placeholder
-- [ ] `ios-node-sdk` fixes (auto-reconnect, `hup_action_response`, inbound stream, voice helpers) opened as a PR against ASOS
+- [x] `xcodegen generate` produces `FeralCompanion.xcodeproj` cleanly
+- [x] `xcodebuild -scheme FeralCompanion -destination 'generic/platform=iOS Simulator' build` succeeds — `BUILD SUCCEEDED` 2026-05-05 18:14
+- [ ] App launches on iPhone simulator and shows the Phase-1 placeholder (deferred — Phase 3 wires real UI)
+- [ ] `ios-node-sdk` fixes (auto-reconnect, `hup_action_response`, inbound stream, voice helpers) opened as a PR against ASOS — IN PROGRESS
 
 ## Outstanding for Day 2+
 
