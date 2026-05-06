@@ -7,6 +7,12 @@ struct ChatView: View {
     @EnvironmentObject var env: AppEnvironment
     @State private var voiceActive = false
     @State private var capture: AudioCapture?
+    /// Local @State copy of the input. We sync to env.chat.draft only
+    /// on send. SwiftUI's binding-into-EnvironmentObject path does not
+    /// update reliably on real iPhone hardware (works in simulator,
+    /// fails on device with Cursor + iOS 26.x — a known SwiftUI quirk).
+    @State private var input: String = ""
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,33 +49,28 @@ struct ChatView: View {
                 }
             }
 
-            // Composer: text input + mic.
+            // Composer: text input + mic. Uses local @State for the
+            // input so SwiftUI re-renders correctly on every keystroke
+            // — direct binding into EnvironmentObject.published can
+            // drop updates on real iPhones.
             HStack(spacing: 8) {
-                TextField(
-                    "Ask FERAL anything",
-                    text: Binding(
-                        get: { env.chat.draft },
-                        set: { env.chat.draft = $0 }
-                    ),
-                    axis: .vertical
-                )
+                TextField("Ask FERAL anything", text: $input, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...4)
+                    .focused($inputFocused)
+                    .submitLabel(.send)
+                    .onSubmit { Task { await sendCurrent() } }
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
 
                 Button {
-                    if env.brain.state.isConnected {
-                        Task { await env.chat.send() }
-                    } else {
-                        env.chat.appendSystemMessage("Not connected to a brain. Open Settings → Pair with a brain.")
-                    }
+                    Task { await sendCurrent() }
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title2)
-                        .foregroundStyle(env.brain.state.isConnected ? Color.green : Color.gray)
+                        .foregroundStyle(canSend ? Color.green : Color.gray)
                 }
-                .disabled(env.chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || env.chat.sending)
+                .disabled(!canSend)
 
                 Button {
                     if env.brain.state.isConnected {
@@ -86,6 +87,23 @@ struct ChatView: View {
             .padding()
             .background(.ultraThinMaterial)
         }
+    }
+
+    private var canSend: Bool {
+        !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !env.chat.sending
+    }
+
+    private func sendCurrent() async {
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        if !env.brain.state.isConnected {
+            env.chat.appendSystemMessage("Not connected to a brain. Open Settings → Pair with a brain.")
+            return
+        }
+        env.chat.draft = text
+        await env.chat.send()
+        input = ""
+        inputFocused = false
     }
 
     private func toggleVoice() async {

@@ -86,6 +86,17 @@ public final class ConnectionStore: ObservableObject {
             self.defaults.set(decoded.brainURL.absoluteString, forKey: "feral.brainURL")
             self.defaults.set(bearer, forKey: "feral.phoneBearer")
             self.status = .paired(brainURL: decoded.brainURL, nodeId: self.nodeId)
+
+            // First-pair UX: auto-activate Apple Health so the brain
+            // sees a phone with capabilities right away. The user
+            // can deactivate it later in the Devices tab if they
+            // prefer the W300 path. This also fires the iOS
+            // HealthKit auth sheet on first pair so the user gets
+            // ONE permission prompt instead of empty Vitals.
+            if !deviceStore.activeAdapters.contains(where: { $0.capability == "apple_healthkit" }) {
+                DebugLog.shared.info("pair: auto-activating apple_healthkit so the brain sees capabilities")
+                deviceStore.activate("apple_healthkit")
+            }
         } catch {
             DebugLog.shared.error("pair: failed — \(error.localizedDescription)")
             self.status = .error(message: error.localizedDescription)

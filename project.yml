@@ -100,6 +100,22 @@ targets:
           - bluetooth-central
           - audio
         ITSAppUsesNonExemptEncryption: false
+        # App Transport Security — allow plain HTTP and ws:// to a
+        # FERAL brain running on the user's LAN (e.g. 192.168.x.x:9090).
+        # iOS 9+ blocks unencrypted connections by default; without
+        # this block, URLSessionWebSocketTask silently fails the
+        # handshake and the brain sees the connection drop instantly.
+        # We use NSAllowsLocalNetworking=true (PRIVATE address ranges
+        # only — RFC1918) instead of NSAllowsArbitraryLoads so we
+        # don't open up arbitrary HTTP for the rest of the app.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoadsInWebContent: false
+        # iOS 14+ Local Network Privacy — the brain advertises mDNS
+        # and lives on the same Wi‑Fi as the phone. Without this
+        # purpose string, iOS will deny the connection with a system
+        # alert even when ATS allows it.
+        NSLocalNetworkUsageDescription: "FERAL connects to your local FERAL brain on this Wi-Fi network."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.feral.companion
