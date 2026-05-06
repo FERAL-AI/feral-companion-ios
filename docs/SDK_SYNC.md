@@ -9,9 +9,17 @@ The canonical home of `FeralNodeSDK` is **`ASOS/feral-nodes/ios-node-sdk/`**. Th
 | Field | Value |
 | --- | --- |
 | Synced from | `ASOS/feral-nodes/ios-node-sdk/Sources/FeralNodeSDK/` |
-| Source SHA | `060c16e2dced5e4497b55c0fe23c5a18b964d910` (release: v2026.5.14) |
-| Synced on | 2026-05-05 |
+| Source SHA | `04a0b94d824a5ad4d8a271403507e94e972c5f48` (PR #73 — HUP v1.3 phone-as-peer + reconnect + action_response) |
+| Synced on | 2026-05-05 (Phase 2) |
 | Sync direction | ASOS → this repo |
+| SDK version | `0.2.0`, HUP version `1.3.0` |
+
+## Sync history
+
+| Date | Source SHA | Notes |
+| --- | --- | --- |
+| 2026-05-05 (initial) | `060c16e2` | v2026.5.14 baseline; SDK v0.1.0-scaffold, HUP v1.2.0 |
+| 2026-05-05 (Phase 2) | `04a0b94d` | PR #73: phone-as-peer envelopes, reconnect, action_response, inbound stream, optional hupVersion. SDK v0.2.0, HUP v1.3.0 |
 
 ## Sync protocol
 
