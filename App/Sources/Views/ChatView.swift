@@ -32,7 +32,12 @@ struct ChatView: View {
                     .padding(.top, 6)
             }
 
-            // Message scroll.
+            // Message scroll. Two SwiftUI mechanisms make the keyboard
+            // dismissable without a Done button:
+            //   1. .scrollDismissesKeyboard(.interactively) — drag the
+            //      list to swipe-dismiss.
+            //   2. .contentShape(Rectangle()).onTapGesture — tapping
+            //      anywhere in the message area resigns focus.
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
@@ -48,6 +53,9 @@ struct ChatView: View {
                     }
                     .padding()
                 }
+                .scrollDismissesKeyboard(.interactively)
+                .contentShape(Rectangle())
+                .onTapGesture { inputFocused = false }
                 .onChange(of: env.chat.messages.count) { _ in
                     if let last = env.chat.messages.last {
                         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
@@ -69,16 +77,6 @@ struct ChatView: View {
                     .textInputAutocapitalization(.sentences)
                     .padding(.horizontal, 12).padding(.vertical, 10)
                     .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
-                    .toolbar {
-                        // Keyboard toolbar with explicit Done button —
-                        // makes leaving the field reliable across iOS
-                        // versions, which the user reported broke on
-                        // their iPhone (couldn't dismiss keyboard).
-                        ToolbarItemGroup(placement: .keyboard) {
-                            Spacer()
-                            Button("Done") { inputFocused = false }
-                        }
-                    }
 
                 Button {
                     Task { await sendCurrent() }

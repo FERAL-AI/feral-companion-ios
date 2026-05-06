@@ -39,6 +39,17 @@ public final class BrainClient: ObservableObject {
     /// progress). Used by views to render typing indicators.
     @Published public private(set) var isAssistantSpeaking: Bool = false
 
+    /// Stable conversation id sent on every `chat_request`. The brain's
+    /// `ChatRequestPayload` requires a non-empty `session_id`. We
+    /// generate one per BrainClient lifetime so multiple turns share
+    /// orchestrator context. If the brain returns a different
+    /// `session_id` on the first `chat_response`, we adopt that.
+    @Published public private(set) var chatSessionId: String = UUID().uuidString
+
+    /// Stable voice stream id emitted on `voice_session_start`. Reset
+    /// when a new voice session opens.
+    @Published public private(set) var voiceStreamId: String = UUID().uuidString
+
     private var node: FeralNode?
     private var inboundTask: Task<Void, Never>?
     private let audioPlayback: AudioPlayback
@@ -103,17 +114,38 @@ public final class BrainClient: ObservableObject {
     // MARK: - Outbound
 
     /// Send a chat message. Brain replies via `chat_response` on the
-    /// inbound stream and we append it to ``transcript``.
+    /// inbound stream and we append it to ``transcript``. Uses the
+    /// schema-correct values from `Info.swift` enums — pass an explicit
+    /// `sessionId` to override the per-client default.
     public func sendChat(_ text: String, sessionId: String? = nil) async throws {
         guard let node else { throw BrainClientError.notConnected }
+        let sid = sessionId ?? chatSessionId
         transcript.append(BrainMessage(role: .user, text: text))
-        try await node.sendChatRequest(text: text, sessionId: sessionId, replyMode: "text", channel: "phone")
+        try await node.sendChatRequest(
+            text: text,
+            sessionId: sid,
+            replyMode: .final,
+            channel: .chat
+        )
     }
 
     /// Begin a voice session. Call before streaming audio chunks.
+    /// Defaults to `openai_realtime` + VAD + barge-in, the same as
+    /// the brain's daemon_session voice path expects when a phone
+    /// node hasn't customized provider selection.
     public func startVoiceSession() async throws {
         guard let node else { throw BrainClientError.notConnected }
-        try await node.startVoiceSession(voiceMode: "realtime", sampleRate: 24000, encoding: "pcm16")
+        // Mint a fresh stream id every session so the brain's voice
+        // router treats consecutive starts as distinct sessions.
+        voiceStreamId = UUID().uuidString
+        try await node.startVoiceSession(
+            streamId: voiceStreamId,
+            voiceMode: .openaiRealtime,
+            sampleRate: 24000,
+            channels: 1,
+            mode: .vad,
+            interruptPolicy: .bargeIn
+        )
     }
 
     public func sendAudioChunk(_ pcm: Data, isFinal: Bool = false) async throws {
@@ -123,7 +155,7 @@ public final class BrainClient: ObservableObject {
 
     public func interruptVoice() async throws {
         guard let node else { throw BrainClientError.notConnected }
-        try await node.interruptVoiceSession()
+        try await node.interruptVoiceSession(streamId: voiceStreamId)
     }
 
     // MARK: - Inbound dispatch
@@ -146,8 +178,16 @@ public final class BrainClient: ObservableObject {
             }
 
         case "chat_response", "text_response":
+            // If the brain echoed back a session_id, adopt it so future
+            // chat_request frames thread onto the same orchestrator
+            // session. Brain handler builds the session_id deterministically
+            // for phone nodes (server.py daemon_session chat branch).
+            if case .string(let sid) = frame.payload["session_id"] ?? .null, !sid.isEmpty {
+                if sid != chatSessionId { chatSessionId = sid }
+            }
             if case .string(let text) = frame.payload["text"] ?? .null, !text.isEmpty {
                 transcript.append(BrainMessage(role: .assistant, text: text))
+                isAssistantSpeaking = false
             }
 
         case "transcript":

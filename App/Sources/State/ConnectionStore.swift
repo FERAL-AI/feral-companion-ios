@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import SwiftUI
 
 /// Real `ConnectionStore`. Tracks the user's pairing payload, owns the
@@ -28,6 +29,7 @@ public final class ConnectionStore: ObservableObject {
     public let healthStore: HealthStore
 
     private let defaults: UserDefaults
+    private var brainStateCancellable: AnyCancellable?
 
     public init(defaults: UserDefaults = .standard,
                 brainClient: BrainClient? = nil,
@@ -56,6 +58,40 @@ public final class ConnectionStore: ObservableObject {
             self.brainURL = url
             self.phoneBearer = bearer
             self.status = .paired(brainURL: url, nodeId: self.nodeId)
+        }
+
+        // Mirror BrainClient.state into our status so the badge,
+        // chat send button, and Settings status all read the same
+        // truth. Without this, ConnectionStore.status sets eagerly to
+        // .connected after `brainClient.connect()` returns even if
+        // node_ack hasn't arrived — the source of "have to close+reopen
+        // to see connected" reported during live testing.
+        self.brainStateCancellable = self.brainClient.$state
+            .receive(on: RunLoop.main)
+            .sink { [weak self] brainState in
+                self?.handleBrainStateChange(brainState)
+            }
+    }
+
+    private func handleBrainStateChange(_ brainState: BrainClient.State) {
+        switch brainState {
+        case .connected(let url, _):
+            self.status = .connected(brainURL: url)
+        case .connecting(let url):
+            self.status = .connecting(brainURL: url)
+        case .reconnecting:
+            self.status = .reconnecting
+        case .failed(let m):
+            self.status = .error(message: m)
+        case .disconnected:
+            // Don't downgrade .paired (stored URL+bearer) to .unpaired
+            // just because we're not actively connected — pair info
+            // survives across connect cycles.
+            if let url = self.brainURL {
+                self.status = .paired(brainURL: url, nodeId: self.nodeId)
+            } else {
+                self.status = .unpaired
+            }
         }
     }
 
@@ -149,13 +185,12 @@ public final class ConnectionStore: ObservableObject {
             return
         }
         DebugLog.shared.info("connect: opening WS \(wsURL.absoluteString) with \(deviceStore.activeAdapters.count) adapter(s)")
-        status = .connecting(brainURL: brainURL)
         let adapters = deviceStore.activeAdapters
         await brainClient.connect(brainURL: wsURL, apiKey: bearer, nodeId: nodeId, adapters: adapters)
-        // BrainClient flips to .connected when node_ack arrives; we
-        // mirror its state into ours.
-        status = .connected(brainURL: brainURL)
-        DebugLog.shared.success("connect: connected to \(brainURL.absoluteString)")
+        // Status flips via the brainClient.$state subscription set up
+        // in init — DO NOT eagerly set .connected here. The subscription
+        // reads node_ack and is the single source of truth.
+        DebugLog.shared.info("connect: handed off to BrainClient; awaiting node_ack")
     }
 
     public func disconnect() async {

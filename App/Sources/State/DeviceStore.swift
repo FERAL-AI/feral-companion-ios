@@ -48,12 +48,44 @@ public final class DeviceStore: ObservableObject {
     /// without waiting for the brain round-trip.
     private weak var healthStore: HealthStore?
 
-    public init() {
+    private let defaults: UserDefaults
+    private static let activeCapabilitiesKey = "feral.activeCapabilities"
+
+    public init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         seedCatalog()
     }
 
     public func bind(healthStore: HealthStore) {
         self.healthStore = healthStore
+    }
+
+    // MARK: - Persistence
+
+    /// Restore activations from UserDefaults so a cold launch sends a
+    /// non-empty `node_register.capabilities` to the brain. Without
+    /// this, every relaunch logs `caps: []` server-side until the user
+    /// manually re-toggles each adapter in the Devices tab.
+    public func restoreActiveCapabilities() {
+        guard let saved = defaults.array(forKey: Self.activeCapabilitiesKey) as? [String] else { return }
+        for cap in saved {
+            // Skip capabilities the catalog doesn't know about (e.g.
+            // schema drift between app versions).
+            guard entries.contains(where: { $0.id == cap }) else { continue }
+            activate(cap)
+        }
+    }
+
+    private func persist() {
+        let caps = activeAdapters.map(\.capability)
+        defaults.set(caps, forKey: Self.activeCapabilitiesKey)
+    }
+
+    public func deactivateAll() {
+        for cap in activeAdapters.map(\.capability) {
+            deactivate(cap)
+        }
+        defaults.removeObject(forKey: Self.activeCapabilitiesKey)
     }
 
     // MARK: - Catalog
@@ -122,6 +154,7 @@ public final class DeviceStore: ObservableObject {
             activeAdapters.append(adapter)
         }
         updateStatus(capability, to: .active)
+        persist()
 
         // Adapter-specific preflight runs immediately on the main actor.
         // For HealthKit this triggers the iOS permission sheet AND
@@ -145,6 +178,7 @@ public final class DeviceStore: ObservableObject {
         adapterByCapability.removeValue(forKey: capability)
         activeAdapters.removeAll { $0.capability == capability }
         updateStatus(capability, to: .available)
+        persist()
     }
 
     private func makeAdapter(for capability: String) -> VendorAdapter? {

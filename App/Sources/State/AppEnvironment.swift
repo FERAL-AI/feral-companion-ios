@@ -17,10 +17,40 @@ public final class AppEnvironment: ObservableObject {
     public var devices: DeviceStore { connection.deviceStore }
     public var health: HealthStore { connection.healthStore }
 
+    /// Forwards `objectWillChange` from every nested ObservableObject
+    /// up to AppEnvironment. SwiftUI views that only inject the
+    /// environment object (the common case) get re-rendered when any
+    /// nested store publishes — fixing the "have to close+reopen to
+    /// see connected" bug surfaced during live iPhone testing.
+    private var cancellables: Set<AnyCancellable> = []
+
     public init(connection: ConnectionStore, chat: ChatStore) {
         self.connection = connection
         self.chat = chat
         self.chat.bind(to: connection.brainClient)
+        wireForwarding()
+    }
+
+    private func wireForwarding() {
+        // Forward every nested @Published-bearing store. We intentionally
+        // include both ConnectionStore (status, brainURL) and BrainClient
+        // (state, transcript, liveTranscript) so the toolbar badge updates
+        // on either source of truth.
+        connection.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        connection.brainClient.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        connection.deviceStore.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        connection.healthStore.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        chat.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
     }
 
     /// Production wiring. Real `BrainClient`, real `DeviceStore`.
@@ -33,6 +63,10 @@ public final class AppEnvironment: ObservableObject {
         // "Connect" on the Devices tab so the iOS permission prompt is
         // tied to a clear user action.
         conn.deviceStore.bind(healthStore: conn.healthStore)
+        // Restore the user's previously-active adapter set so cold
+        // launches send non-empty `node_register.capabilities` to the
+        // brain. Otherwise every relaunch logs `caps: []` server-side.
+        conn.deviceStore.restoreActiveCapabilities()
         return AppEnvironment(connection: conn, chat: chat)
     }
 
