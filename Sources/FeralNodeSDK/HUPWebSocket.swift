@@ -18,7 +18,13 @@ public actor HUPWebSocket {
     /// Set once `disconnect()` is called — disables reconnect so a
     /// graceful shutdown stays shut down.
     private var stopped = false
-    private let session: URLSession
+    /// Per-instance URLSession. `URLSession.shared` is well-known to
+    /// drop long-lived WebSocket connections on iOS — the session has
+    /// no delegate to keep them alive, and the system reaps them. We
+    /// build our own session with explicit timeouts so the brain
+    /// doesn't see "client disconnected the moment after accept".
+    private var ownedSession: URLSession?
+    private let providedSession: URLSession?
     private var heartbeatTask: Task<Void, Never>?
     private var heartbeatIntervalMs: Int = 10000
     private var reconnectTask: Task<Void, Never>?
@@ -44,13 +50,33 @@ public actor HUPWebSocket {
     public init(
         url: URL,
         apiKey: String? = nil,
-        session: URLSession = .shared,
+        session: URLSession? = nil,
         backoff: BackoffPolicy = .spec
     ) {
         self.url = url
         self.apiKey = apiKey
-        self.session = session
+        self.providedSession = session
         self.backoff = backoff
+    }
+
+    /// The session this instance uses. Lazily built per-instance with
+    /// timeouts that suit a long-lived realtime WebSocket; tests may
+    /// inject their own via the initializer.
+    private var session: URLSession {
+        if let s = providedSession { return s }
+        if let s = ownedSession { return s }
+        let cfg = URLSessionConfiguration.default
+        // The phone is often on Wi-Fi flapping between AP roams or
+        // background-foreground transitions. waitsForConnectivity gives
+        // URLSession a chance to ride out a sub-second outage instead
+        // of failing the WS upgrade.
+        cfg.waitsForConnectivity = true
+        cfg.timeoutIntervalForRequest = 30
+        cfg.timeoutIntervalForResource = 0  // 0 = effectively unlimited for streaming
+        cfg.shouldUseExtendedBackgroundIdleMode = true
+        let s = URLSession(configuration: cfg)
+        ownedSession = s
+        return s
     }
 
     public func connect(
@@ -90,7 +116,20 @@ public actor HUPWebSocket {
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .useDefaultKeys
         let data = try encoder.encode(frame)
-        try await task.send(.data(data))
+        // Send as a TEXT frame, not binary. Starlette's `receive_json`
+        // defaults to mode="text"; binary frames go through a
+        // different (sometimes flaky) decode path. The brain logs the
+        // RuntimeError("WebSocket is not connected ...") almost
+        // instantly when the very first frame is binary on iOS — it
+        // looks like the upgrade gets confused about content-type.
+        // Match the pattern the older FeralBrainClient used.
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw FeralNodeError.malformedFrame(underlying: NSError(
+                domain: "HUPWebSocket", code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "frame is not valid UTF-8"]
+            ))
+        }
+        try await task.send(.string(text))
     }
 
     /// Start the heartbeat loop with the interval from node_ack.

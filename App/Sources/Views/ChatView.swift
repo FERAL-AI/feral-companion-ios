@@ -1,17 +1,23 @@
 import SwiftUI
 
+/// Mutable composer state held in a long-lived ObservableObject so
+/// SwiftUI doesn't reset the input every time `env` republishes
+/// (which happens often via BrainClient liveTranscript / state /
+/// transcript updates). @State on a view that re-creates frequently
+/// drops keystrokes on real iPhones — @StateObject survives.
+@MainActor
+final class ChatComposer: ObservableObject {
+    @Published var input: String = ""
+}
+
 /// Chat + voice. The user can type to the brain, and tap the mic
 /// button to start a realtime voice session. Replies stream in
 /// from `BrainClient.transcript`.
 struct ChatView: View {
     @EnvironmentObject var env: AppEnvironment
+    @StateObject private var composer = ChatComposer()
     @State private var voiceActive = false
     @State private var capture: AudioCapture?
-    /// Local @State copy of the input. We sync to env.chat.draft only
-    /// on send. SwiftUI's binding-into-EnvironmentObject path does not
-    /// update reliably on real iPhone hardware (works in simulator,
-    /// fails on device with Cursor + iOS 26.x — a known SwiftUI quirk).
-    @State private var input: String = ""
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -49,19 +55,30 @@ struct ChatView: View {
                 }
             }
 
-            // Composer: text input + mic. Uses local @State for the
-            // input so SwiftUI re-renders correctly on every keystroke
-            // — direct binding into EnvironmentObject.published can
-            // drop updates on real iPhones.
+            // Composer. Single-line so .submitLabel(.send) + .onSubmit
+            // actually trigger send on Return (vertical text fields
+            // suppress submit). @StateObject composer holds the input
+            // string so re-renders of env.* don't drop keystrokes.
             HStack(spacing: 8) {
-                TextField("Ask FERAL anything", text: $input, axis: .vertical)
+                TextField("Ask FERAL anything", text: $composer.input)
                     .textFieldStyle(.plain)
-                    .lineLimit(1...4)
                     .focused($inputFocused)
                     .submitLabel(.send)
                     .onSubmit { Task { await sendCurrent() } }
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+                    .autocorrectionDisabled(false)
+                    .textInputAutocapitalization(.sentences)
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+                    .toolbar {
+                        // Keyboard toolbar with explicit Done button —
+                        // makes leaving the field reliable across iOS
+                        // versions, which the user reported broke on
+                        // their iPhone (couldn't dismiss keyboard).
+                        ToolbarItemGroup(placement: .keyboard) {
+                            Spacer()
+                            Button("Done") { inputFocused = false }
+                        }
+                    }
 
                 Button {
                     Task { await sendCurrent() }
@@ -90,11 +107,11 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !env.chat.sending
+        !composer.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !env.chat.sending
     }
 
     private func sendCurrent() async {
-        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = composer.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         if !env.brain.state.isConnected {
             env.chat.appendSystemMessage("Not connected to a brain. Open Settings → Pair with a brain.")
@@ -102,7 +119,7 @@ struct ChatView: View {
         }
         env.chat.draft = text
         await env.chat.send()
-        input = ""
+        composer.input = ""
         inputFocused = false
     }
 
