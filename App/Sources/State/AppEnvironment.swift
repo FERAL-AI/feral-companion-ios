@@ -5,54 +5,47 @@ import Combine
 /// every long-lived service (brain client, adapter manager, stores).
 /// Built once at app launch by ``FeralCompanionApp`` and injected
 /// into the SwiftUI environment.
-///
-/// Construction is via ``live()`` for production and via the explicit
-/// ``preview()`` factory for SwiftUI previews / unit tests so we never
-/// accidentally instantiate the real WebSocket or AVFoundation paths
-/// from a test.
 @MainActor
 public final class AppEnvironment: ObservableObject {
 
-    // MARK: - Stores
     public let connection: ConnectionStore
     public let chat: ChatStore
-    public let health: HealthStore
-    public let devices: DeviceStore
 
-    // MARK: - Construction
+    /// Convenience accessors so views don't reach into `connection.*`
+    /// when they only need a single store.
+    public var brain: BrainClient { connection.brainClient }
+    public var devices: DeviceStore { connection.deviceStore }
+    public var health: HealthStore { connection.healthStore }
 
-    public init(
-        connection: ConnectionStore,
-        chat: ChatStore,
-        health: HealthStore,
-        devices: DeviceStore
-    ) {
+    public init(connection: ConnectionStore, chat: ChatStore) {
         self.connection = connection
         self.chat = chat
-        self.health = health
-        self.devices = devices
+        self.chat.bind(to: connection.brainClient)
     }
 
-    /// Production wiring. Real `BrainClient`, real `DeviceManager`.
+    /// Production wiring. Real `BrainClient`, real `DeviceStore`.
     public static func live() -> AppEnvironment {
-        let connection = ConnectionStore()
+        let conn = ConnectionStore()
         let chat = ChatStore()
-        let health = HealthStore()
-        let devices = DeviceStore()
-        return AppEnvironment(
-            connection: connection,
-            chat: chat,
-            health: health,
-            devices: devices
-        )
+        // Apple Health is activated by default — it always works on
+        // any iPhone, and it's the universal "I have a Whoop / Garmin
+        // / Apple Watch" path.
+        conn.deviceStore.activate("apple_healthkit")
+        return AppEnvironment(connection: conn, chat: chat)
     }
 
     // MARK: - Deep links
 
     /// Called from `App.onOpenURL` for `feral://pair?p=...` links.
-    /// Today this is a no-op until ``ConnectionStore.handleDeepLink``
-    /// lands in Phase 3.
     public func handleDeepLink(_ url: URL) {
-        // Phase 3 will route the URL into ConnectionStore.handlePairingPayload(url:)
+        Task { @MainActor in
+            guard let decoded = PairingClient.decode(url.absoluteString) else { return }
+            await connection.applyPairing(decoded)
+            // Auto-connect on a successful pairing — saves the user
+            // a tap on the Pair screen.
+            if case .paired = connection.status {
+                await connection.connect()
+            }
+        }
     }
 }

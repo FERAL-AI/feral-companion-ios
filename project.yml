@@ -78,10 +78,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.feral.companion
         TARGETED_DEVICE_FAMILY: "1,2"
-        # Code signing — overridden per-developer via xcconfig or
-        # Xcode UI; default is Automatic so anyone can build.
+        # Code signing — automatic with the operator's personal team.
+        # Override here if a different team should sign release builds.
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: ""
+        DEVELOPMENT_TEAM: V59NQ286UZ
         # HealthKit + Bluetooth + Background Modes capability flags.
         # Capabilities themselves are added via the entitlements file.
         CODE_SIGN_ENTITLEMENTS: App/FeralCompanion.entitlements
