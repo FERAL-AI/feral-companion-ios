@@ -2,11 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- HealthKit. Adapter reads HR/SpO2/steps/sleep when no external
-         vital source is paired. -->
+    <!-- Basic HealthKit — supported on Personal Team (free) and Paid.
+         Lets us read HR, SpO2, steps, sleep, body temp, HRV from
+         Apple Health (which itself aggregates from Apple Watch,
+         Whoop, Garmin, Fitbit, Oura, Polar, etc.).
+
+         NOT included intentionally:
+           com.apple.developer.healthkit.access
+         That entitlement is for Verifiable Health Records (FHIR /
+         clinical records) and requires a paid Apple Developer Program
+         membership. We don't need clinical records to read vitals. -->
     <key>com.apple.developer.healthkit</key>
     <true/>
-    <key>com.apple.developer.healthkit.access</key>
-    <array/>
 </dict>
 </plist>
