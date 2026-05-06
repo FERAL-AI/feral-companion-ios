@@ -22,24 +22,34 @@ public final class HealthKitAdapter: VendorAdapter {
 
     private let store = HKHealthStore()
     private weak var attachedNode: FeralNode?
+    private weak var healthStore: HealthStore?
     private var pollTimer: Timer?
     private let pollInterval: TimeInterval
+    private var permissionsGranted = false
 
-    public init(pollInterval: TimeInterval = 30) {
+    public init(pollInterval: TimeInterval = 30, healthStore: HealthStore? = nil) {
         self.pollInterval = pollInterval
+        self.healthStore = healthStore
     }
 
-    // MARK: - VendorAdapter
+    /// Inject the app's `HealthStore` so device-event emits also surface
+    /// in the Vitals UI (without waiting for the brain to round-trip).
+    public func setHealthStore(_ store: HealthStore) {
+        self.healthStore = store
+    }
 
-    public func attach(to node: FeralNode) async throws {
+    /// Preflight permission grant. Callable from `DeviceStore.activate`
+    /// BEFORE a brain is connected, so the user sees the standard iOS
+    /// HealthKit auth sheet immediately instead of after pairing.
+    /// Also kicks off a one-shot read so the Vitals tab populates
+    /// without waiting for the brain handshake.
+    public func requestPermissionsAndPrime() async throws {
         guard HKHealthStore.isHealthDataAvailable() else {
             throw FeralNodeError.permissionDenied(
                 capability: capability,
                 reason: "HealthKit is not available on this device"
             )
         }
-        self.attachedNode = node
-
         let toRead: Set<HKObjectType> = [
             HKObjectType.quantityType(forIdentifier: .heartRate)!,
             HKObjectType.quantityType(forIdentifier: .oxygenSaturation)!,
@@ -48,7 +58,6 @@ public final class HealthKitAdapter: VendorAdapter {
             HKObjectType.quantityType(forIdentifier: .bodyTemperature)!,
             HKCategoryType.categoryType(forIdentifier: .sleepAnalysis)!,
         ]
-
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             store.requestAuthorization(toShare: nil, read: toRead) { success, error in
                 if let error = error {
@@ -66,7 +75,47 @@ public final class HealthKitAdapter: VendorAdapter {
                 }
             }
         }
+        permissionsGranted = true
 
+        // Prime the UI with one read pass right now — without a brain
+        // we can still populate the Vitals tab.
+        await readToHealthStore()
+    }
+
+    private func readToHealthStore() async {
+        if let bpm = try? await readLatestHeartRate() {
+            await MainActor.run {
+                self.healthStore?.record(eventType: "heart_rate",
+                                         data: ["bpm": .int(Int(bpm))],
+                                         source: "apple_healthkit")
+            }
+        }
+        if let sat = try? await readLatestSpO2() {
+            await MainActor.run {
+                self.healthStore?.record(eventType: "spo2",
+                                         data: ["current": .int(Int(sat * 100))],
+                                         source: "apple_healthkit")
+            }
+        }
+        if let steps = try? await readTodaysSteps() {
+            await MainActor.run {
+                self.healthStore?.record(eventType: "steps",
+                                         data: ["count": .int(steps)],
+                                         source: "apple_healthkit")
+            }
+        }
+    }
+
+    // MARK: - VendorAdapter
+
+    public func attach(to node: FeralNode) async throws {
+        self.attachedNode = node
+        // If the activation flow already ran requestPermissionsAndPrime,
+        // skip re-asking. Otherwise do it now (lazy path for adapters
+        // that were never pre-activated).
+        if !permissionsGranted {
+            try await requestPermissionsAndPrime()
+        }
         startPolling()
     }
 
@@ -175,24 +224,30 @@ public final class HealthKitAdapter: VendorAdapter {
     }
 
     private func pollOnce() async {
-        guard let node = attachedNode else { return }
         if let bpm = try? await readLatestHeartRate() {
-            try? await node.emit(eventType: "heart_rate", data: [
-                "bpm": .int(Int(bpm)),
-                "source": .string("apple_healthkit"),
-            ])
+            await emitEverywhere(eventType: "heart_rate",
+                                 data: ["bpm": .int(Int(bpm))])
         }
         if let sat = try? await readLatestSpO2() {
-            try? await node.emit(eventType: "spo2", data: [
-                "current": .int(Int(sat * 100)),
-                "source": .string("apple_healthkit"),
-            ])
+            await emitEverywhere(eventType: "spo2",
+                                 data: ["current": .int(Int(sat * 100))])
         }
         if let steps = try? await readTodaysSteps() {
-            try? await node.emit(eventType: "steps", data: [
-                "count": .int(steps),
-                "source": .string("apple_healthkit"),
-            ])
+            await emitEverywhere(eventType: "steps",
+                                 data: ["count": .int(steps)])
+        }
+    }
+
+    /// Fan-out: write to the local HealthStore (so Vitals UI updates
+    /// even without a brain) AND emit to the brain if connected.
+    private func emitEverywhere(eventType: String, data: [String: AnyCodable]) async {
+        await MainActor.run {
+            self.healthStore?.record(eventType: eventType, data: data, source: "apple_healthkit")
+        }
+        if let node = attachedNode {
+            var payload = data
+            payload["source"] = .string("apple_healthkit")
+            try? await node.emit(eventType: eventType, data: payload)
         }
     }
 

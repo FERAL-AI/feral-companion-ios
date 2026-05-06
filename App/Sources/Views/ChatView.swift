@@ -59,21 +59,29 @@ struct ChatView: View {
                     .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
 
                 Button {
-                    Task { await env.chat.send() }
+                    if env.brain.state.isConnected {
+                        Task { await env.chat.send() }
+                    } else {
+                        env.chat.appendSystemMessage("Not connected to a brain. Open Settings → Pair with a brain.")
+                    }
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title2)
+                        .foregroundStyle(env.brain.state.isConnected ? Color.green : Color.gray)
                 }
                 .disabled(env.chat.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || env.chat.sending)
 
                 Button {
-                    Task { await toggleVoice() }
+                    if env.brain.state.isConnected {
+                        Task { await toggleVoice() }
+                    } else {
+                        env.chat.appendSystemMessage("Voice needs a paired brain. Open Settings → Pair with a brain.")
+                    }
                 } label: {
                     Image(systemName: voiceActive ? "mic.fill" : "mic")
                         .font(.title2)
-                        .foregroundStyle(voiceActive ? .red : .green)
+                        .foregroundStyle(voiceActive ? .red : (env.brain.state.isConnected ? .green : .gray))
                 }
-                .disabled(!env.brain.state.isConnected)
             }
             .padding()
             .background(.ultraThinMaterial)

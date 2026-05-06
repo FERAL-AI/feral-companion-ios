@@ -3,6 +3,9 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var env: AppEnvironment
     @Binding var showPairingSheet: Bool
+    @State private var showLog = false
+    @State private var probing = false
+    @State private var lastProbeResult: String? = nil
 
     var body: some View {
         Form {
@@ -60,14 +63,52 @@ struct SettingsView: View {
                 }
             }
 
+            if let url = env.connection.brainURL {
+                Section("Diagnostics") {
+                    Button {
+                        Task {
+                            probing = true
+                            let ok = await env.connection.testBrainReachability(url: url)
+                            lastProbeResult = ok ? "Brain reachable ✓" : "Brain unreachable — see debug log"
+                            probing = false
+                        }
+                    } label: {
+                        if probing {
+                            HStack { ProgressView(); Text("Probing brain…") }
+                        } else {
+                            Label("Test brain reachability", systemImage: "stethoscope")
+                        }
+                    }
+                    if let result = lastProbeResult {
+                        Text(result)
+                            .font(.caption)
+                            .foregroundStyle(result.contains("✓") ? Color.green : Color.red)
+                    }
+                }
+            }
+
+            Section("Debugging") {
+                Button {
+                    showLog = true
+                } label: {
+                    Label("Show debug log", systemImage: "doc.text.magnifyingglass")
+                }
+                Text("Captures pair attempts, brain probes, adapter activations, and errors. No need to attach Xcode.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
             Section("About") {
-                LabeledContent("Companion version", value: "0.3.0 (Phase 3)")
+                LabeledContent("Companion version", value: "0.4.0 (Phase 3 + 6)")
                 LabeledContent("HUP version", value: FeralNodeSDKInfo.hupVersion)
                 LabeledContent("Bundle ID", value: Bundle.main.bundleIdentifier ?? "?")
             }
         }
         .scrollContentBackground(.hidden)
         .background(Color.black.ignoresSafeArea())
+        .sheet(isPresented: $showLog) {
+            DebugLogView()
+        }
     }
 
     private var statusText: String {

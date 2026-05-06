@@ -27,10 +27,12 @@ public final class AppEnvironment: ObservableObject {
     public static func live() -> AppEnvironment {
         let conn = ConnectionStore()
         let chat = ChatStore()
-        // Apple Health is activated by default — it always works on
-        // any iPhone, and it's the universal "I have a Whoop / Garmin
-        // / Apple Watch" path.
-        conn.deviceStore.activate("apple_healthkit")
+        // Bind HealthStore to DeviceStore so adapters can write
+        // readings into the local Vitals UI directly. Note: we do NOT
+        // auto-activate HealthKit on first launch — the user taps
+        // "Connect" on the Devices tab so the iOS permission prompt is
+        // tied to a clear user action.
+        conn.deviceStore.bind(healthStore: conn.healthStore)
         return AppEnvironment(connection: conn, chat: chat)
     }
 

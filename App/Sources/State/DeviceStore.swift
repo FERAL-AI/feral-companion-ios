@@ -43,8 +43,17 @@ public final class DeviceStore: ObservableObject {
     /// Lazily-initialized adapter instances keyed by capability.
     private var adapterByCapability: [String: VendorAdapter] = [:]
 
+    /// Set after `bind(healthStore:)`. Adapters that surface readings
+    /// to the local Vitals UI receive a reference so the tab populates
+    /// without waiting for the brain round-trip.
+    private weak var healthStore: HealthStore?
+
     public init() {
         seedCatalog()
+    }
+
+    public func bind(healthStore: HealthStore) {
+        self.healthStore = healthStore
     }
 
     // MARK: - Catalog
@@ -98,9 +107,11 @@ public final class DeviceStore: ObservableObject {
 
     // MARK: - Activation
 
-    /// Activate (instantiate + attempt to attach when connected) the
-    /// adapter for a given capability. The actual `attach(to:)` is
-    /// wired by `ConnectionStore.connect()`.
+    /// Activate (instantiate + run any preflight) the adapter for a
+    /// given capability. The full `attach(to:)` happens inside
+    /// `ConnectionStore.connect()` when a brain is paired; preflight
+    /// here gives the user immediate feedback (HealthKit permission
+    /// prompt, etc.) WITHOUT waiting for the brain.
     public func activate(_ capability: String) {
         guard let adapter = makeAdapter(for: capability) else {
             updateStatus(capability, to: .unsupported(reason: "Adapter not implemented in this build"))
@@ -111,6 +122,23 @@ public final class DeviceStore: ObservableObject {
             activeAdapters.append(adapter)
         }
         updateStatus(capability, to: .active)
+
+        // Adapter-specific preflight runs immediately on the main actor.
+        // For HealthKit this triggers the iOS permission sheet AND
+        // primes the Vitals UI with a one-shot read, so the user sees
+        // something happen even before they pair a brain.
+        if let hk = adapter as? HealthKitAdapter {
+            if let store = healthStore { hk.setHealthStore(store) }
+            Task { [weak self] in
+                do {
+                    try await hk.requestPermissionsAndPrime()
+                } catch {
+                    await MainActor.run {
+                        self?.updateStatus(capability, to: .failed(reason: error.localizedDescription))
+                    }
+                }
+            }
+        }
     }
 
     public func deactivate(_ capability: String) {
