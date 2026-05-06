@@ -38,9 +38,35 @@ targets:
     sources:
       - path: App/Sources
       - path: Sources/FeralNodeSDK
+      # FMDB is a runtime dependency of JWBle.framework. The vendor
+      # demo pulled it in via CocoaPods; we vendor the source files
+      # instead so the build is self-contained.
+      - path: Vendor/FMDB
+        type: folder
+        optional: true
     resources:
       - path: App/Assets.xcassets
       - path: App/LaunchScreen.storyboard
+    dependencies:
+      # Vendor frameworks live in Vendor/ and are gitignored. The
+      # operator drops the .framework bundles into Vendor/ once;
+      # CI re-fetches them from the secured asset bucket. Each one
+      # is embed=true so the .ipa carries them.
+      - framework: Vendor/JWBle.framework
+        embed: true
+        codeSign: true
+      - framework: Vendor/CocoaLumberjack.framework
+        embed: true
+        codeSign: true
+      - framework: Vendor/RTKAudioConnectSDK.framework
+        embed: true
+        codeSign: true
+      - framework: Vendor/RTKLEFoundation.framework
+        embed: true
+        codeSign: true
+      - framework: Vendor/RTKOTASDK.framework
+        embed: true
+        codeSign: true
     info:
       path: App/Info.plist
       properties:

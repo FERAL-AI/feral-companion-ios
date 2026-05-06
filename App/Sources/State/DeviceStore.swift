@@ -68,9 +68,9 @@ public final class DeviceStore: ObservableObject {
             Entry(
                 id: "jw_health_glasses",
                 displayName: "JieLi Health Glasses (W300)",
-                summary: "FERAL prototype glasses. HR, SpO2, body temp, UV, accelerometer, vibration, mic over BLE.",
+                summary: "FERAL prototype glasses. HR, SpO2, body temp, UV, steps, vibration over BLE.",
                 category: .bluetooth,
-                status: .unsupported(reason: "Vendor frameworks not yet linked into this build (Phase 6)")
+                status: .available
             ),
             Entry(
                 id: "veepoo_wristband",
@@ -126,9 +126,10 @@ public final class DeviceStore: ObservableObject {
         case "iphone_camera":
             return CameraPermissionAdapter()
         case "jw_health_glasses":
-            // SDK-provided stub that throws adapterNotWired in Phase 6
-            // until the JieLi frameworks are dropped in.
-            return JWBleAdapter()
+            // Real wired adapter — Vendor frameworks must be present
+            // at Vendor/JWBle.framework. The companion app target
+            // links + embeds them via project.yml.
+            return JWBleAdapterWired()
         case "veepoo_wristband":
             return VeepooAdapter()
         case "w610_glasses":
