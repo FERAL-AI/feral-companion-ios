@@ -136,6 +136,19 @@ targets:
       - Tests/FeralCompanionTests
     dependencies:
       - target: FeralCompanion
+      # Vendor frameworks are needed for module resolution on the test
+      # bundle. `@testable import FeralCompanion` re-exposes types
+      # whose Swift signatures reference the vendor `import JWBle`
+      # statement (e.g. `JWBleSession.Phase`); without these listed
+      # here, compilation fails with "Unable to resolve module
+      # dependency: 'JWBle'". `embed: false` because the host app
+      # already embeds them — the test bundle loads against the host.
+      - framework: Vendor/JWBle.framework
+        embed: false
+        codeSign: false
+      - framework: Vendor/CocoaLumberjack.framework
+        embed: false
+        codeSign: false
     settings:
       base:
         BUNDLE_LOADER: $(TEST_HOST)

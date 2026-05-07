@@ -27,12 +27,29 @@ struct FeralCompanionApp: App {
     /// connected"` log we observed on real iPhones. Cleanly tearing
     /// down on background and reconnecting on foreground is the
     /// canonical fix.
+    ///
+    /// Phase-1 truthfulness sweep adds explicit teardown of the BLE
+    /// link (`JWBleSession`) and any in-flight phone-mic capture
+    /// (`BrainClient.stopVoice`) so the OS never suspends the app
+    /// with the radio + microphone still hot. Without this we ended
+    /// up with three independent half-alive subsystems on background:
+    /// the WS (already torn down), AVAudioEngine (engine.start was
+    /// still active), and JWBle (BLE link still bonded).
     private func handleScenePhase(_ newPhase: ScenePhase) {
         switch newPhase {
         case .background:
-            DebugLog.shared.info("scene: background — flushing chat history + closing WS")
+            DebugLog.shared.info("scene: background — stopping voice/BLE + flushing chat history + closing WS")
             environment.brain.flushHistory()
-            Task { await environment.connection.disconnect() }
+            Task { @MainActor in
+                // Order matters: stop voice first so the brain sees a
+                // clean is_final chunk before the WS goes away. Then
+                // close the WS. Disconnect the JWBle link last so any
+                // queued `glasses_status: failed("…")` emit can ride
+                // out on the open WS.
+                await environment.brain.stopVoice()
+                await environment.connection.disconnect()
+                JWBleSession.shared.disconnect()
+            }
         case .active:
             DebugLog.shared.info("scene: active — re-evaluating connection")
             // Reconnect if we have a saved pairing and aren't already up.

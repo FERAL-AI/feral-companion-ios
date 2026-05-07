@@ -13,11 +13,15 @@ final class ChatComposer: ObservableObject {
 /// Chat + voice. The user can type to the brain, and tap the mic
 /// button to start a realtime voice session. Replies stream in
 /// from `BrainClient.transcript`.
+///
+/// Voice lifecycle is owned by `BrainClient` (Phase 1 truthfulness
+/// sweep) so the same flag drives the chat mic button **and** the
+/// `scenePhase: .background` teardown. Storing voice state in this
+/// view's `@State` would mean the lifecycle layer can't stop the
+/// engine when the OS suspends the app.
 struct ChatView: View {
     @EnvironmentObject var env: AppEnvironment
     @StateObject private var composer = ChatComposer()
-    @State private var voiceActive = false
-    @State private var capture: AudioCapture?
     @State private var showConversationsSheet = false
     @FocusState private var inputFocused: Bool
 
@@ -95,9 +99,9 @@ struct ChatView: View {
                         env.chat.appendSystemMessage("Voice needs a paired brain. Open Settings → Pair with a brain.")
                     }
                 } label: {
-                    Image(systemName: voiceActive ? "mic.fill" : "mic")
+                    Image(systemName: env.brain.voiceActive ? "mic.fill" : "mic")
                         .font(.title2)
-                        .foregroundStyle(voiceActive ? .red : (env.brain.state.isConnected ? .green : .gray))
+                        .foregroundStyle(env.brain.voiceActive ? .red : (env.brain.state.isConnected ? .green : .gray))
                 }
             }
             .padding()
@@ -143,21 +147,12 @@ struct ChatView: View {
     }
 
     private func toggleVoice() async {
-        if voiceActive {
-            capture?.stop()
-            capture = nil
-            voiceActive = false
-            try? await env.brain.sendAudioChunk(Data(), isFinal: true)
+        if env.brain.voiceActive {
+            await env.brain.stopVoice()
             return
         }
         do {
-            try await env.brain.startVoiceSession()
-            let cap = AudioCapture()
-            try cap.start { chunk in
-                Task { try? await env.brain.sendAudioChunk(chunk, isFinal: false) }
-            }
-            self.capture = cap
-            self.voiceActive = true
+            try await env.brain.startVoice()
         } catch {
             // Show a system message in chat so the user sees why nothing happened.
             env.chat.appendSystemMessage("Voice failed: \(error.localizedDescription)")

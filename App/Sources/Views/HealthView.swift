@@ -85,7 +85,13 @@ private struct MetricCard: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Text(reading?.source ?? "no source paired")
+            // Phase-1 truthfulness: render the pipeline qualifier
+            // (e.g. "Apple Health") + the actual sample-source name
+            // (e.g. "Apple Watch") so the user knows whether this
+            // number came through HealthKit or a direct BLE link.
+            // The bare capability id ("apple_healthkit") was the
+            // misleading label the Phase-1 audit flagged.
+            Text(sourceLabel)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -96,6 +102,14 @@ private struct MetricCard: View {
             RoundedRectangle(cornerRadius: 16)
                 .stroke(accent.opacity(0.15), lineWidth: 1)
         )
+    }
+
+    private var sourceLabel: String {
+        guard let r = reading else { return "no source paired" }
+        if !r.sampleSource.isEmpty {
+            return "\(r.pipeline) · \(r.sampleSource)"
+        }
+        return r.pipeline
     }
 }
 
