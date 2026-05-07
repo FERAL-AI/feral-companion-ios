@@ -60,13 +60,20 @@ public final class DeviceStore: ObservableObject {
     public private(set) var intent: Set<String> = []
 
     /// Last-known iOS Bluetooth power state. Set via the bound
-    /// `BluetoothSystemMonitor`; defaults to `true` so non-BT
-    /// capabilities don't briefly read failed during boot before the
-    /// first `centralManagerDidUpdateState` callback lands.
-    public private(set) var bluetoothPoweredOn: Bool = true
+    /// `BluetoothSystemMonitor`; defaults to `false` so a Bluetooth
+    /// row never reads `.active` until `CBCentralManager` has
+    /// explicitly confirmed `.poweredOn` (Phase-1.5 strict cold
+    /// launch). Non-BT capabilities are unaffected by this flag.
+    public private(set) var bluetoothPoweredOn: Bool = false
+
+    /// Last-known `CBManagerState`. Held alongside
+    /// ``bluetoothPoweredOn`` so the row can render distinct
+    /// `failed` reasons for `.unknown` / `.resetting` /
+    /// `.unauthorized` / `.poweredOff`.
+    public private(set) var bluetoothState: CBManagerState = .unknown
 
     /// Last-known `JWBleSession.phase`. Set via the bound session;
-    /// defaults to `.idle` for the same reason as above.
+    /// defaults to `.idle` since no link exists at construction.
     public private(set) var jwBlePhase: JWBleSession.Phase = .idle
 
     /// Lazily-initialized adapter instances keyed by capability.
@@ -321,11 +328,34 @@ public final class DeviceStore: ObservableObject {
 
     private func _recomputeBluetoothStatus(for capability: String) {
         guard isBluetoothCapability(capability) else { return }
-        // System BT off always wins — even if JWBleSession.phase still
-        // reads `.ready` because the link hasn't dropped yet, we know
-        // the radio is off and a heartbeat will fail momentarily.
+        // System BT off / unknown / resetting / unauthorized always
+        // wins — even if JWBleSession.phase still reads `.ready`
+        // because the link hasn't dropped yet, we know the radio is
+        // not in a state where a heartbeat can succeed. Phase-1.5
+        // strict cold-launch contract: the row only reads `.active`
+        // when `CBCentralManager` has explicitly confirmed
+        // `.poweredOn`.
         if !bluetoothPoweredOn {
-            updateStatus(capability, to: .failed(reason: "Bluetooth is off — turn it on in Settings"))
+            let reason: String
+            switch bluetoothState {
+            case .poweredOff:
+                reason = "Bluetooth is off — turn it on in Settings"
+            case .unauthorized:
+                reason = "FERAL needs Bluetooth permission — open Settings → FERAL → Bluetooth"
+            case .unsupported:
+                reason = "This device does not support Bluetooth Low Energy"
+            case .resetting:
+                reason = "Bluetooth is resetting — wait a moment and retry"
+            case .unknown:
+                reason = "Bluetooth state unknown — waiting for system"
+            case .poweredOn:
+                // Should never happen because !bluetoothPoweredOn;
+                // included for exhaustiveness.
+                reason = "Bluetooth state inconsistent"
+            @unknown default:
+                reason = "Bluetooth state unknown — waiting for system"
+            }
+            updateStatus(capability, to: .failed(reason: reason))
             return
         }
 
@@ -352,9 +382,14 @@ public final class DeviceStore: ObservableObject {
     // MARK: - State subscriptions (test seams)
 
     /// Apply a Bluetooth power state. Public for tests; production
-    /// code subscribes via `bindBluetoothMonitor`.
+    /// code subscribes via `bindBluetoothMonitor`. Treats every
+    /// state other than `.poweredOn` as "BT row cannot be active"
+    /// — `.unknown` and `.resetting` are deliberately conservative
+    /// so a slow CoreBluetooth bring-up never lets a row briefly
+    /// claim `.active`.
     public func _applyBluetoothState(_ state: CBManagerState) {
-        bluetoothPoweredOn = (state == .poweredOn)
+        self.bluetoothState = state
+        self.bluetoothPoweredOn = (state == .poweredOn)
         _recomputeBluetoothStatus()
     }
 

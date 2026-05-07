@@ -128,6 +128,11 @@ public final class JWBleSession: ObservableObject {
         case .timeOutDisconnect:
             DebugLog.shared.warning("jwble: TimeOutDisconnect — BLE comm timed out")
             phase = .failed(reason: "Communication timeout — glasses disconnected")
+            // Phase-1.5: tell the brain instantly. Without this emit
+            // the brain only learned via the 30s heartbeat sweep
+            // derating the row to stale; iOS UI was instant but the
+            // brain — and therefore the web dashboard — lagged.
+            emitGlassesStatus("disconnected", extra: ["reason": .string("timeout_disconnect")])
 
         case .deviceStatusChanges:
             DebugLog.shared.info("jwble: DeviceStatusChanges")
@@ -146,10 +151,24 @@ public final class JWBleSession: ObservableObject {
 
         case .disConnect:
             DebugLog.shared.warning("jwble: status=DisConnect")
+            // Phase-1.5: only report a brain-side disconnect when we
+            // were actually mid-link. A `.disConnect` callback in
+            // the `.idle` / `.scanning` phase is BLE noise (e.g.
+            // user backgrounded the scan modal); emitting then
+            // would falsely tell the brain we lost something we
+            // never had.
             if case .ready = phase {
                 phase = .failed(reason: "Glasses disconnected")
+                emitGlassesStatus(
+                    "disconnected",
+                    extra: ["reason": .string("ble_disconnect_after_ready")],
+                )
             } else if case .connecting = phase {
                 phase = .failed(reason: "Connection lost during setup")
+                emitGlassesStatus(
+                    "disconnected",
+                    extra: ["reason": .string("ble_disconnect_during_handshake")],
+                )
             }
 
         case .temp:

@@ -75,6 +75,28 @@ final class FeralCompanionTests: XCTestCase {
     }
 
     @MainActor
+    func test_cold_launch_default_state_treats_bluetooth_as_unknown_off() {
+        // Phase-1.5: BluetoothSystemMonitor's first emit is
+        // .unknown until CBCentralManager confirms .poweredOn.
+        // The DeviceStore must treat that state as "BT row cannot
+        // be active yet" — the legacy default of bluetoothPoweredOn
+        // = true allowed a row to briefly read .active during a
+        // slow CoreBluetooth bring-up.
+        let (store, _) = makeIsolatedStore()
+        XCTAssertFalse(store.bluetoothPoweredOn)
+        store.activate("jw_health_glasses")
+        // Without an explicit .poweredOn callback the row reads
+        // .failed with a "state unknown" reason.
+        guard case .failed(let reason) = store.entries.first(where: { $0.id == "jw_health_glasses" })?.status else {
+            return XCTFail("BT row should NOT read .active before CBCentralManager confirms .poweredOn")
+        }
+        XCTAssertTrue(
+            reason.contains("Bluetooth state unknown") || reason.contains("Bluetooth is off"),
+            "expected 'Bluetooth state unknown' or 'Bluetooth is off' message, got: \(reason)"
+        )
+    }
+
+    @MainActor
     func test_applyJWBlePhase_ready_marks_bluetooth_row_active_when_BT_powered_on() {
         let (store, _) = makeIsolatedStore()
         store._applyBluetoothState(.poweredOn)
