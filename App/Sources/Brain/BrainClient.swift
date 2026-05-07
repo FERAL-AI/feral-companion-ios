@@ -53,9 +53,51 @@ public final class BrainClient: ObservableObject {
     private var node: FeralNode?
     private var inboundTask: Task<Void, Never>?
     private let audioPlayback: AudioPlayback
+    private weak var history: ChatHistoryStore?
+    private var historyCancellables: Set<AnyCancellable> = []
 
     public init(audioPlayback: AudioPlayback? = nil) {
         self.audioPlayback = audioPlayback ?? AudioPlayback()
+    }
+
+    // MARK: - History binding
+
+    /// Bind a `ChatHistoryStore` so:
+    ///   1. The most recent session's transcript is restored on cold launch.
+    ///   2. `chatSessionId` aligns with the store's `currentSessionId`.
+    ///   3. Every `transcript` change is debounced-saved to disk.
+    ///   4. When the store switches sessions, our transcript reloads.
+    public func bindHistory(_ store: ChatHistoryStore) {
+        self.history = store
+        self.chatSessionId = store.currentSessionId
+        self.transcript = store.loadMessages(for: store.currentSessionId)
+
+        // Persist on every transcript change.
+        $transcript
+            .dropFirst()
+            .sink { [weak self] msgs in
+                guard let self = self, let h = self.history else { return }
+                h.save(msgs, for: self.chatSessionId)
+            }
+            .store(in: &historyCancellables)
+
+        // Reload when the user switches conversations.
+        store.$currentSessionId
+            .dropFirst()
+            .sink { [weak self] sid in
+                guard let self = self, let h = self.history else { return }
+                self.chatSessionId = sid
+                self.transcript = h.loadMessages(for: sid)
+            }
+            .store(in: &historyCancellables)
+    }
+
+    /// Force a synchronous flush of the current transcript — call from
+    /// `scenePhase: .background` so iOS suspending the app doesn't
+    /// lose the last few messages.
+    public func flushHistory() {
+        guard let h = history else { return }
+        h.flushNow(transcript, for: chatSessionId)
     }
 
     // MARK: - Lifecycle

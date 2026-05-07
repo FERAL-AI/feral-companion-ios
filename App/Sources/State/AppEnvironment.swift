@@ -10,6 +10,7 @@ public final class AppEnvironment: ObservableObject {
 
     public let connection: ConnectionStore
     public let chat: ChatStore
+    public let history: ChatHistoryStore
 
     /// Convenience accessors so views don't reach into `connection.*`
     /// when they only need a single store.
@@ -24,10 +25,16 @@ public final class AppEnvironment: ObservableObject {
     /// see connected" bug surfaced during live iPhone testing.
     private var cancellables: Set<AnyCancellable> = []
 
-    public init(connection: ConnectionStore, chat: ChatStore) {
+    public init(connection: ConnectionStore, chat: ChatStore, history: ChatHistoryStore? = nil) {
         self.connection = connection
         self.chat = chat
+        self.history = history ?? ChatHistoryStore()
         self.chat.bind(to: connection.brainClient)
+        // Wire chat history persistence into the BrainClient so every
+        // append to `transcript` is debounced-saved to disk under the
+        // current session id, and cold launches restore the most
+        // recent session's transcript instead of an empty pane.
+        connection.brainClient.bindHistory(self.history)
         wireForwarding()
     }
 
@@ -51,6 +58,9 @@ public final class AppEnvironment: ObservableObject {
         chat.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
+        history.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
     }
 
     /// Production wiring. Real `BrainClient`, real `DeviceStore`.
@@ -67,6 +77,17 @@ public final class AppEnvironment: ObservableObject {
         // launches send non-empty `node_register.capabilities` to the
         // brain. Otherwise every relaunch logs `caps: []` server-side.
         conn.deviceStore.restoreActiveCapabilities()
+        // Safety net: if a brain is already paired but no adapters
+        // were persisted (user paired in a build that predated
+        // adapter-persistence), auto-activate Apple Health so the
+        // brain sees real capabilities on the very next connect.
+        // Without this fallback, already-paired users keep logging
+        // `caps: []` server-side until they manually toggle the
+        // Devices tab.
+        if conn.brainURL != nil && conn.deviceStore.activeAdapters.isEmpty {
+            DebugLog.shared.info("env: paired brain detected with empty caps — auto-activating apple_healthkit")
+            conn.deviceStore.activate("apple_healthkit")
+        }
         return AppEnvironment(connection: conn, chat: chat)
     }
 

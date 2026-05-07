@@ -108,8 +108,8 @@ public final class DeviceStore: ObservableObject {
             ),
             Entry(
                 id: "jw_health_glasses",
-                displayName: "JieLi Health Glasses (W300)",
-                summary: "FERAL prototype glasses. HR, SpO2, body temp, UV, steps, vibration over BLE.",
+                displayName: "Theora Glasses",
+                summary: "Theora prototype glasses (W300 platform). HR, SpO2, body temp, UV, steps, vibration over BLE.",
                 category: .bluetooth,
                 status: .available
             ),

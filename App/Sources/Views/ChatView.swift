@@ -18,6 +18,7 @@ struct ChatView: View {
     @StateObject private var composer = ChatComposer()
     @State private var voiceActive = false
     @State private var capture: AudioCapture?
+    @State private var showConversationsSheet = false
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -102,6 +103,26 @@ struct ChatView: View {
             .padding()
             .background(.ultraThinMaterial)
         }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                HStack(spacing: 12) {
+                    Button {
+                        showConversationsSheet = true
+                    } label: {
+                        Image(systemName: "list.bullet.rectangle")
+                    }
+                    Button {
+                        env.history.newSession()
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showConversationsSheet) {
+            ConversationsListView(isPresented: $showConversationsSheet)
+                .environmentObject(env)
+        }
     }
 
     private var canSend: Bool {
@@ -164,6 +185,76 @@ private struct EmptyChatPlaceholder: View {
         env.brain.state.isConnected
         ? "Type a question or hold the mic. FERAL pulls live signal from your devices when it matters."
         : "Open Settings → Pair a brain. You can scan a QR or paste a feral:// link."
+    }
+}
+
+/// Sheet listing every persisted conversation. Tapping a row switches
+/// the active session and triggers BrainClient to reload that
+/// session's transcript from disk.
+struct ConversationsListView: View {
+    @EnvironmentObject var env: AppEnvironment
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Button {
+                        env.history.newSession()
+                        isPresented = false
+                    } label: {
+                        Label("New chat", systemImage: "square.and.pencil")
+                    }
+                }
+                Section("History") {
+                    ForEach(env.history.sessions) { meta in
+                        Button {
+                            env.history.switchTo(sessionId: meta.id)
+                            isPresented = false
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack {
+                                    Text(meta.title.isEmpty ? "New chat" : meta.title)
+                                        .font(.body.weight(meta.id == env.history.currentSessionId ? .semibold : .regular))
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    if meta.id == env.history.currentSessionId {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                    }
+                                }
+                                HStack(spacing: 8) {
+                                    Text(relativeDate(meta.lastUpdated))
+                                    Text("·")
+                                    Text("\(meta.messageCount) message\(meta.messageCount == 1 ? "" : "s")")
+                                }
+                                .font(.caption2).foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    .onDelete { offsets in
+                        for idx in offsets {
+                            let meta = env.history.sessions[idx]
+                            env.history.deleteSession(meta.id)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Conversations")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { isPresented = false }
+                }
+            }
+        }
+    }
+
+    private func relativeDate(_ d: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f.localizedString(for: d, relativeTo: Date())
     }
 }
 
