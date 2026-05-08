@@ -101,12 +101,20 @@ public actor HUPWebSocket {
         connected = true
     }
 
-    public func disconnect() async {
+    /// Tear down the socket and emit a single ``node_bye`` frame with
+    /// the supplied reason. Defaults to ``"shutdown"`` for the
+    /// generic SDK consumer; callers that know the disconnect was
+    /// user-initiated (e.g. companion ``BrainClient.disconnect``)
+    /// should pass ``"user_disconnect"`` so the brain log reflects
+    /// intent instead of forcing every disconnect to read as a
+    /// crash-style shutdown. Mirrored upstream in
+    /// ``feral-nodes/ios-node-sdk`` for the next vendor sync.
+    public func disconnect(reason: String = "shutdown") async {
         stopped = true
         stopHeartbeat()
         reconnectTask?.cancel()
         reconnectTask = nil
-        try? await sendNodeBye(reason: "shutdown")
+        try? await sendNodeBye(reason: reason)
         task?.cancel(with: .goingAway, reason: nil)
         connected = false
     }

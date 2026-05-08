@@ -177,8 +177,18 @@ public final class BrainClient: ObservableObject {
         inboundTask?.cancel()
         inboundTask = nil
         if let node = node {
-            try? await node.sendNodeBye(reason: "user_disconnect")
-            await node.disconnect()
+            // The SDK's ``disconnect(reason:)`` already emits a
+            // single ``node_bye`` frame with the caller-supplied
+            // reason. We previously emitted an explicit
+            // ``user_disconnect`` bye AND then called
+            // ``node.disconnect()`` which sent a second
+            // ``shutdown`` bye — the brain log only ever showed
+            // ``shutdown`` because the second frame raced past the
+            // first (operator report 2026-05-08:
+            // "node_bye reason=shutdown" right after register, even
+            // though the user explicitly disconnected). One bye,
+            // correctly labeled.
+            await node.disconnect(reason: "user_disconnect")
         }
         node = nil
         state = .disconnected

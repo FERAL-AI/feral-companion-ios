@@ -31,6 +31,18 @@ public final class ConnectionStore: ObservableObject {
     private let defaults: UserDefaults
     private var brainStateCancellable: AnyCancellable?
 
+    /// Re-entry gate for ``connect()``. The state-based check on
+    /// ``brainClient.state`` cannot catch the window between
+    /// "decide to connect" and "BrainClient flips state to
+    /// .connecting" (BrainClient.connect awaits an internal
+    /// ``disconnect()`` first, so state stays whatever it was for
+    /// tens of milliseconds). Operator log 2026-05-08 showed two
+    /// `Daemon connecting` events for the same `device_id` only 91ms
+    /// apart, with a `node_bye reason=shutdown` between them — that's
+    /// the second connect tearing down the first. This flag closes
+    /// the race at the ConnectionStore boundary.
+    private var connectInFlight: Bool = false
+
     public init(defaults: UserDefaults = .standard,
                 brainClient: BrainClient? = nil,
                 pairingClient: PairingClient? = nil,
@@ -184,6 +196,12 @@ public final class ConnectionStore: ObservableObject {
             status = .error(message: "No paired brain.")
             return
         }
+        // Re-entry gate FIRST — closes the window the state-based
+        // guard can't see (see ``connectInFlight`` docstring).
+        guard !connectInFlight else {
+            DebugLog.shared.info("connect: another connect() is already in flight — skipping duplicate dial")
+            return
+        }
         switch brainClient.state {
         case .connecting, .connected:
             DebugLog.shared.info("connect: brainClient already \(brainClient.state) — skipping duplicate dial")
@@ -191,6 +209,8 @@ public final class ConnectionStore: ObservableObject {
         case .disconnected, .reconnecting, .failed:
             break
         }
+        connectInFlight = true
+        defer { connectInFlight = false }
         guard let wsURL = PairingClient.websocketURL(from: brainURL) else {
             DebugLog.shared.error("connect: invalid brain URL \(brainURL.absoluteString)")
             status = .error(message: "Invalid brain URL.")
