@@ -310,12 +310,38 @@ public final class BrainClient: ObservableObject {
                 if case .bool(let b) = frame.payload["is_partial"] ?? .null { return b }
                 return false
             }()
+            // Honor the explicit `role` field from the brain (added
+            // 2026-05-08 to fix the "every chat bubble looks like a
+            // user message" bug — iOS used to hardcode every
+            // transcript as `.user` regardless of who spoke). The
+            // brain always tags role on the wire now; we fall back
+            // to `.assistant` for missing-role frames because in
+            // practice the only legitimate untagged transcripts are
+            // OpenAI Realtime audio-out transcripts.
+            let roleString: String? = {
+                if case .string(let s) = frame.payload["role"] ?? .null { return s }
+                return nil
+            }()
+            // Defense-in-depth: if a brain on an older build is still
+            // leaking the legacy `[user] ` sentinel, strip it AND
+            // treat the message as user-spoken even when the role
+            // field is missing.
+            let hasLegacyUserPrefix = text.hasPrefix("[user] ")
+            let cleanText = hasLegacyUserPrefix
+                ? String(text.dropFirst("[user] ".count))
+                : text
+            let role: BrainMessage.Role = {
+                if let r = roleString, let parsed = BrainMessage.Role(rawValue: r) {
+                    return parsed
+                }
+                return hasLegacyUserPrefix ? .user : .assistant
+            }()
             if isPartial {
-                liveTranscript = text
+                liveTranscript = cleanText
             } else {
                 liveTranscript = nil
-                if !text.isEmpty {
-                    transcript.append(BrainMessage(role: .user, text: text))
+                if !cleanText.isEmpty {
+                    transcript.append(BrainMessage(role: role, text: cleanText))
                 }
             }
 
