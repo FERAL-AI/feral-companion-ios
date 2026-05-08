@@ -166,11 +166,30 @@ public final class ConnectionStore: ObservableObject {
 
     /// Connect (or reconnect) the brain client using the current
     /// stored brain URL + bearer. Auto-pulls in the loaded adapters.
+    ///
+    /// **Idempotency**: this is a no-op if the underlying
+    /// ``BrainClient`` is already in ``.connecting`` or ``.connected``.
+    /// Two paths can race to call ``connect()``:
+    ///   1. ``applyPairing`` auto-connects on success.
+    ///   2. ``scenePhase: .active`` reconnects whenever ``.paired``.
+    /// Both fire on return-from-permission during first-pair, and the
+    /// brain previously saw two `node_register` round-trips per pair —
+    /// which manifested as duplicate Devices rows on the dashboard
+    /// (operator report, 2026-05-08). The guard keeps a single round-
+    /// trip without dropping any genuine reconnect attempt (because
+    /// .disconnected / .reconnecting / .failed all fall through).
     public func connect() async {
         guard let brainURL = brainURL, let bearer = phoneBearer else {
             DebugLog.shared.error("connect: no paired brain")
             status = .error(message: "No paired brain.")
             return
+        }
+        switch brainClient.state {
+        case .connecting, .connected:
+            DebugLog.shared.info("connect: brainClient already \(brainClient.state) — skipping duplicate dial")
+            return
+        case .disconnected, .reconnecting, .failed:
+            break
         }
         guard let wsURL = PairingClient.websocketURL(from: brainURL) else {
             DebugLog.shared.error("connect: invalid brain URL \(brainURL.absoluteString)")

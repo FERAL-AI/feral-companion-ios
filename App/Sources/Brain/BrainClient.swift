@@ -27,6 +27,15 @@ public final class BrainClient: ObservableObject {
 
     @Published public private(set) var state: State = .disconnected
 
+    /// Test-only seam used by `FeralCompanionTests` to drive the
+    /// idempotency guard inside `ConnectionStore.connect()` without
+    /// opening a real WebSocket. Must not be called from product code
+    /// (the underlying transport is the only legitimate state writer);
+    /// pinned by `_ConnectionStoreConnectIdempotencyTests`.
+    public func _setStateForTesting(_ newState: State) {
+        self.state = newState
+    }
+
     /// Latest text turns from the brain (oldest first). Hosts append
     /// user-typed messages here too so chat views render uniformly.
     @Published public private(set) var transcript: [BrainMessage] = []

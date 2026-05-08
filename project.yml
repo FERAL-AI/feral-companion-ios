@@ -158,6 +158,15 @@ targets:
       base:
         BUNDLE_LOADER: $(TEST_HOST)
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/FeralCompanion.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/FeralCompanion
+        # Xcode 26 enforces "every signed bundle has an Info.plist".
+        # xcodegen no longer auto-injects one for unit-test bundles, so
+        # opt into the synthetic plist explicitly with a stable bundle
+        # identifier — otherwise the build dies with
+        #   "Cannot code sign because the target does not have an
+        #    Info.plist file and one is not being generated automatically"
+        # (Xcode 26.4 / iPhone 17 sim, 2026-05-08).
+        GENERATE_INFOPLIST_FILE: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: com.feral.companion.tests
 
 schemes:
   FeralCompanion:

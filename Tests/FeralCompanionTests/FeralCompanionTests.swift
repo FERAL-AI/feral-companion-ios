@@ -222,4 +222,76 @@ final class FeralCompanionTests: XCTestCase {
             .active
         )
     }
+
+    /// Pin the ``ConnectionStore.connect()`` idempotency guard added
+    /// after the 2026-05-08 operator report ("dashboard shows the
+    /// same iPhone as multiple paired devices").
+    ///
+    /// Two paths can race to call ``connect()`` on the same activation:
+    /// `applyPairing` auto-connects on success AND
+    /// `scenePhase: .active` reconnects whenever ``.paired``. Without
+    /// the guard, the brain sees two ``node_register`` round-trips per
+    /// pair. The guard short-circuits when the underlying brainClient
+    /// is already in ``.connecting`` or ``.connected``.
+    @MainActor
+    func test_connect_short_circuits_when_brainClient_already_connecting() async {
+        let suite = "feral.test.\(UUID().uuidString)"
+        let testDefaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults().removePersistentDomain(forName: suite) }
+
+        // Seed a paired connection store so the early-return guards
+        // ("no paired brain") don't fire.
+        let url = URL(string: "http://192.168.1.10:9090")!
+        testDefaults.set(url.absoluteString, forKey: "feral.brainURL")
+        testDefaults.set("test-bearer", forKey: "feral.phoneBearer")
+
+        let conn = ConnectionStore(defaults: testDefaults)
+
+        // Drive brainClient into the in-flight state directly. If the
+        // guard regresses, ``connect()`` will pass this point and try
+        // a real reachability probe + WS dial, which the test would
+        // fail by either taking >>1s or by leaving status in .error.
+        conn.brainClient._setStateForTesting(.connecting(brainURL: url))
+
+        let started = Date()
+        await conn.connect()
+        let elapsed = Date().timeIntervalSince(started)
+
+        // The guard returns synchronously in <50ms. A regressed call
+        // would hit `testBrainReachability` (5s URLSession timeout)
+        // and at minimum kick the WS open path.
+        XCTAssertLessThan(
+            elapsed, 0.5,
+            "connect() did not short-circuit when brainClient was already .connecting; " +
+            "took \(elapsed)s. The idempotency guard in ConnectionStore.connect() likely regressed."
+        )
+        // Status must NOT have flipped to .error — that would indicate
+        // the unreachable-probe branch ran instead of the guard.
+        if case .error(let msg) = conn.status {
+            XCTFail("connect() ran the full path despite .connecting state, ended in .error: \(msg)")
+        }
+    }
+
+    @MainActor
+    func test_connect_short_circuits_when_brainClient_already_connected() async {
+        let suite = "feral.test.\(UUID().uuidString)"
+        let testDefaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults().removePersistentDomain(forName: suite) }
+
+        let url = URL(string: "http://192.168.1.10:9090")!
+        testDefaults.set(url.absoluteString, forKey: "feral.brainURL")
+        testDefaults.set("test-bearer", forKey: "feral.phoneBearer")
+
+        let conn = ConnectionStore(defaults: testDefaults)
+        conn.brainClient._setStateForTesting(.connected(brainURL: url, sessionToken: nil))
+
+        let started = Date()
+        await conn.connect()
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertLessThan(elapsed, 0.5, "connect() did not short-circuit when already .connected (took \(elapsed)s)")
+        if case .error(let msg) = conn.status {
+            XCTFail("connect() should have been a no-op while already .connected; ended in .error: \(msg)")
+        }
+    }
 }
