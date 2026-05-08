@@ -38,12 +38,17 @@ targets:
     sources:
       - path: App/Sources
       - path: Sources/FeralNodeSDK
-      # FMDB is a runtime dependency of JWBle.framework. The vendor
-      # demo pulled it in via CocoaPods; we vendor the source files
-      # instead so the build is self-contained.
-      - path: Vendor/FMDB
-        type: folder
-        optional: true
+      # JWBle.framework bundles its own FMDatabase.o + FMResultSet.o
+      # but NOT the (FMDatabaseAdditions) category. Compile JUST the
+      # additions .m so its category methods (getTableSchema:, etc.)
+      # register with the runtime FMDatabase class shipped inside
+      # JWBle.framework. Do NOT add the rest of Vendor/FMDB to
+      # sources — that would duplicate-symbol against JWBle.
+      # Without this fix JieLi's JWBleDBModel.createTable crashes
+      # the app at SDK init with:
+      #   *** -[FMDatabase getTableSchema:]: unrecognized selector
+      - path: Vendor/FMDB/FMDatabaseAdditions.m
+      - path: Vendor/FMDB/FMDatabaseAdditions.h
     resources:
       - path: App/Assets.xcassets
       - path: App/LaunchScreen.storyboard
