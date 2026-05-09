@@ -136,10 +136,16 @@ public final class JWBleAdapterWired: VendorAdapter {
                 Task {
                     switch result {
                     case .success(let reading):
+                        // Forward `heart_rate_sample_ts` so the
+                        // brain's freshness gate (operator report
+                        // 2026-05-09) trusts this as live W300 data.
+                        // The W300 spot test JUST returned so
+                        // `Date()` is the genuine sample time.
                         try? await node.emit(eventType: "heart_rate", data: [
                             "bpm": .int(reading.bpm),
                             "is_wearing": .bool(reading.isWearing),
                             "source": .string("jw_health_glasses"),
+                            "heart_rate_sample_ts": .double(Date().timeIntervalSince1970),
                         ])
                         if let actionId = actionId {
                             try? await node.sendActionResponse(
@@ -172,6 +178,7 @@ public final class JWBleAdapterWired: VendorAdapter {
                             "high": .int(r.high),
                             "low": .int(r.low),
                             "source": .string("jw_health_glasses"),
+                            "spo2_sample_ts": .double(Date().timeIntervalSince1970),
                         ])
                         if let actionId = actionId {
                             try? await node.sendActionResponse(
@@ -290,14 +297,33 @@ public final class JWBleAdapterWired: VendorAdapter {
         pollTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             Task { await self?.pollOnce() }
         }
+        // Operator report 2026-05-09: Vitals tab stayed empty for 30s
+        // after activating the W300 because the first poll waited a
+        // full pollInterval. Mirror HealthKitAdapter (line 240) and
+        // fire ONE immediate poll so the user sees a reading within
+        // ~1s of phase transitioning to .ready.
+        Task { [weak self] in await self?.pollOnce() }
     }
 
     private func pollOnce() async {
         guard let node = attachedNode else { return }
         guard W300SensorManager.shared.isDeviceConnected() else { return }
-        // Light cadence: HR + steps. SpO2/temp/UV are user-initiated
-        // because the device's own measurement cycle is long.
+        // Cadence (operator report 2026-05-09 expanded scope):
+        //   * HR + steps: every poll (cheap, fast).
+        //   * SpO2: every 4th poll (~2 min) — JieLi's spot test takes
+        //     ~30s on the device and is power-hungry. The Vitals UI
+        //     also lets the user trigger spot reads on demand.
+        //   * Temperature: every 4th poll (~2 min) — same rationale.
+        // Reads happen serially because W300SensorManager rejects
+        // concurrent reads with `.deviceBusy`.
+        pollTickCount &+= 1
         await runHeartRate(actionId: nil, node: node)
         await runSteps(actionId: nil, node: node)
+        if pollTickCount % 4 == 0 {
+            await runSpO2(actionId: nil, node: node)
+            await runTemperature(actionId: nil, node: node)
+        }
     }
+
+    private var pollTickCount: UInt = 0
 }
