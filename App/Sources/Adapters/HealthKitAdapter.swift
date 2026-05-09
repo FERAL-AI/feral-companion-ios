@@ -244,14 +244,26 @@ public final class HealthKitAdapter: VendorAdapter {
         if let r = try? await readLatestHeartRateWithSource() {
             await emitEverywhere(
                 eventType: "heart_rate",
-                data: ["bpm": .int(Int(r.value))],
+                data: [
+                    "bpm": .int(Int(r.value)),
+                    // Forward HKSample.endDate so the brain's
+                    // proactive engine can gate alerts on freshness
+                    // (operator report 2026-05-09: stale HR fired
+                    // phantom Heart Rate Alert). Brain reads
+                    // ``heart_rate_sample_ts`` in
+                    // perception/fusion.update_sensors.
+                    "heart_rate_sample_ts": .double(r.sampleEndDate.timeIntervalSince1970),
+                ],
                 sampleSource: r.sampleSource
             )
         }
         if let r = try? await readLatestSpO2WithSource() {
             await emitEverywhere(
                 eventType: "spo2",
-                data: ["current": .int(Int(r.value * 100))],
+                data: [
+                    "current": .int(Int(r.value * 100)),
+                    "spo2_sample_ts": .double(r.sampleEndDate.timeIntervalSince1970),
+                ],
                 sampleSource: r.sampleSource
             )
         }
@@ -298,11 +310,17 @@ public final class HealthKitAdapter: VendorAdapter {
     // MARK: - HK queries
 
     /// Lightweight tuple used by every per-metric reader so the
-    /// HealthKit sample-source name reaches Vitals + the brain
-    /// without a second query.
+    /// HealthKit sample-source name AND the sample's recorded
+    /// timestamp reach Vitals + the brain without a second query.
+    /// ``sampleEndDate`` is forwarded to the brain as
+    /// ``*_sample_ts`` so the proactive engine can gate alerts on
+    /// freshness — operator report 2026-05-09 caught a stale
+    /// HealthKit HR (115 bpm, hours old) firing as if it were a
+    /// real-time alert.
     private struct SampledReading {
         let value: Double
         let sampleSource: String
+        let sampleEndDate: Date
     }
 
     private func readLatestHeartRate() async throws -> Double {
@@ -357,7 +375,8 @@ public final class HealthKitAdapter: VendorAdapter {
                 let sourceName = sample.sourceRevision.source.name
                 cont.resume(returning: SampledReading(
                     value: sample.quantity.doubleValue(for: unit),
-                    sampleSource: sourceName
+                    sampleSource: sourceName,
+                    sampleEndDate: sample.endDate
                 ))
             }
             store.execute(q)
