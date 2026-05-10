@@ -67,6 +67,30 @@ public final class BrainClient: ObservableObject {
     /// `@State`.
     @Published public private(set) var voiceActive: Bool = false
 
+    /// Phase 5 / audit-r8 brief #04 — the latest GenUI surface pushed
+    /// by the brain via `genui_push`. The chat tab renders this above
+    /// the message list when present so app surfaces (Notes, Calendar,
+    /// confirmations, etc.) appear inline. `sdui_patch` frames mutate
+    /// `sduiTree` in place when their `screen_id` matches.
+    public struct GenUISurface: Equatable {
+        public let appId: String
+        public let surfaceId: String
+        public let screenId: String
+        public let title: String
+        public let body: String
+        /// Decoded JSON (`Any`-equivalent) — kept loose so JSON-Patch
+        /// applies cleanly. Renderer re-decodes via `SDUINode.decode`.
+        public var sduiTree: NSObject?
+        public let receivedAt: Date
+
+        public static func == (lhs: GenUISurface, rhs: GenUISurface) -> Bool {
+            lhs.appId == rhs.appId && lhs.surfaceId == rhs.surfaceId
+                && lhs.screenId == rhs.screenId && lhs.title == rhs.title
+                && lhs.body == rhs.body && lhs.receivedAt == rhs.receivedAt
+        }
+    }
+    @Published public private(set) var genUI: GenUISurface? = nil
+
     private var node: FeralNode?
     private var inboundTask: Task<Void, Never>?
     private let audioPlayback: AudioPlayback
@@ -210,6 +234,47 @@ public final class BrainClient: ObservableObject {
             replyMode: .final,
             channel: .chat
         )
+    }
+
+    /// Phase 5 / audit-r8 brief #04 — forward a SwiftUI SDUI tap /
+    /// toggle / slider / form submit to the brain. Echoes back the
+    /// `app_id`/`surface_id`/`screen_id` from the original
+    /// `genui_push` so the brain dispatcher can locate the surface.
+    /// `value` accepts the lossy `SDUIJSONValue` re-export from the
+    /// renderer.
+    /// Internal: SDUI tree types are app-internal (App target only) so
+    /// this helper is `internal` — only `ChatView` consumes it.
+    func sendGenUIAction(
+        surface: GenUISurface,
+        actionId: String,
+        eventType: String,
+        value: SDUINode.SDUIJSONValue?
+    ) async throws {
+        guard let node else { throw BrainClientError.notConnected }
+        let codable: AnyCodable? = value.map { Self.sduiValueToCodable($0) }
+        try await node.sendGenUIEvent(
+            appId: surface.appId,
+            surfaceId: surface.surfaceId,
+            screenId: surface.screenId,
+            actionId: actionId,
+            eventType: eventType,
+            value: codable
+        )
+    }
+
+    private static func sduiValueToCodable(_ v: SDUINode.SDUIJSONValue) -> AnyCodable {
+        switch v {
+        case .string(let s): return .string(s)
+        case .int(let i): return .int(i)
+        case .double(let d): return .double(d)
+        case .bool(let b): return .bool(b)
+        case .null: return .null
+        case .array(let arr): return .array(arr.map { sduiValueToCodable($0) })
+        case .object(let obj):
+            var d: [String: AnyCodable] = [:]
+            for (k, vv) in obj { d[k] = sduiValueToCodable(vv) }
+            return .object(d)
+        }
     }
 
     /// Begin a voice session. Call before streaming audio chunks.
@@ -381,10 +446,93 @@ public final class BrainClient: ObservableObject {
                 state = .failed(message: msg)
             }
 
+        case "genui_push":
+            // Phase 5: brain pushed an app surface. Persist it for
+            // ChatView to render. The full SDUI tree lives under
+            // `payload.sdui` as a JSON object; we keep it as an
+            // `NSObject` (a Foundation collection) so JSON-Patch
+            // mutates it cleanly later.
+            let appId = stringField(frame.payload["app_id"]) ?? ""
+            let surfaceId = stringField(frame.payload["surface_id"]) ?? ""
+            let screenId = stringField(frame.payload["screen_id"]) ?? ""
+            let title = stringField(frame.payload["title"]) ?? "\(appId):\(surfaceId)"
+            let body = stringField(frame.payload["body"]) ?? ""
+            let sduiObj = anyJSONField(frame.payload["sdui"])
+            genUI = GenUISurface(
+                appId: appId,
+                surfaceId: surfaceId,
+                screenId: screenId,
+                title: title,
+                body: body,
+                sduiTree: sduiObj,
+                receivedAt: Date()
+            )
+
+        case "sdui_patch":
+            // Patch the active GenUI surface IFF the screen_id matches.
+            // Brain emits one `sdui_patch` per logical change — see
+            // `feral-core/agents/ui_handlers.py` patch helpers.
+            let targetId = stringField(frame.payload["screen_id"]) ?? ""
+            guard var current = genUI, current.screenId == targetId,
+                  let tree = current.sduiTree as Any?,
+                  let patches = patchArrayField(frame.payload["patches"])
+            else { break }
+            let next = SDUIJSON.applyPatches(tree, patches: patches)
+            current.sduiTree = (next as AnyObject) as? NSObject
+            genUI = current
+
         default:
             // Other frame types (skill_proposal, etc.) — silently
             // ignored at this layer; richer surfaces hook on top.
             break
+        }
+    }
+
+    // MARK: - Frame field helpers (Phase 5 GenUI ingest)
+
+    private func stringField(_ value: AnyCodable?) -> String? {
+        guard let value else { return nil }
+        if case .string(let s) = value { return s }
+        return nil
+    }
+
+    /// Extract the inner JSON value (`Any`-equivalent NSObject) from
+    /// an `AnyCodable`. Used for the `genui_push.payload.sdui` blob
+    /// which the brain serialises as a generic JSON object — we don't
+    /// want to model every component as a Swift type at the SDK level
+    /// because the renderer redecodes via `SDUINode.decode`.
+    private func anyJSONField(_ value: AnyCodable?) -> NSObject? {
+        guard let value else { return nil }
+        return Self.anyCodableToFoundation(value) as? NSObject
+    }
+
+    private func patchArrayField(_ value: AnyCodable?) -> [[String: Any]]? {
+        guard let value else { return nil }
+        guard case .array(let arr) = value else { return nil }
+        var out: [[String: Any]] = []
+        for el in arr {
+            guard case .object(let obj) = el else { continue }
+            var dict: [String: Any] = [:]
+            for (k, v) in obj { dict[k] = Self.anyCodableToFoundation(v) }
+            out.append(dict)
+        }
+        return out
+    }
+
+    /// AnyCodable → Foundation tree (String/NSNumber/NSNull/Array/Dict)
+    /// so JSONSerialization-style `[String: Any]` consumers work.
+    private static func anyCodableToFoundation(_ value: AnyCodable) -> Any {
+        switch value {
+        case .string(let s): return s
+        case .int(let i): return i
+        case .double(let d): return d
+        case .bool(let b): return b
+        case .null: return NSNull()
+        case .array(let arr): return arr.map { anyCodableToFoundation($0) }
+        case .object(let obj):
+            var d: [String: Any] = [:]
+            for (k, v) in obj { d[k] = anyCodableToFoundation(v) }
+            return d
         }
     }
 

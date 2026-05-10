@@ -27,6 +27,45 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Phase 5 / audit-r8 brief #04 — render the active GenUI
+            // surface above the message list. Brain pushes via
+            // `genui_push` and updates via `sdui_patch`; BrainClient
+            // tracks the latest in `env.brain.genUI`. Action callbacks
+            // forward to `FeralNode.sendGenUIEvent` with the IDs the
+            // brain sent on the push frame.
+            if let surface = env.brain.genUI, let tree = surface.sduiTree {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "rectangle.3.group.bubble.left")
+                            .foregroundStyle(.secondary)
+                        Text(surface.title).font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text("\(surface.appId):\(surface.surfaceId)")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    if !surface.body.isEmpty {
+                        Text(surface.body)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    SDUIRenderer(tree: tree as Any) { eventType, actionId, value in
+                        Task {
+                            try? await env.brain.sendGenUIAction(
+                                surface: surface,
+                                actionId: actionId,
+                                eventType: eventType,
+                                value: value
+                            )
+                        }
+                    }
+                }
+                .padding(12)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(.horizontal)
+                .padding(.top, 8)
+            }
+
             // Live transcript from the brain (partial speech recognition).
             if let live = env.brain.liveTranscript, !live.isEmpty {
                 Text(live)

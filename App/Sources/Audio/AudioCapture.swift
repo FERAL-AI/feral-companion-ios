@@ -32,15 +32,15 @@ public final class AudioCapture {
     }
 
     public func start(onChunk: @escaping ChunkHandler) throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(
-            .playAndRecord,
-            mode: .voiceChat,
-            options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers, .duckOthers]
-        )
-        try session.setPreferredSampleRate(24000)
-        try session.setPreferredIOBufferDuration(0.01)
-        try session.setActive(true, options: [])
+        // Phase 6 / audit-r8 brief #03: route AVAudioSession config
+        // through W300AudioBridge so capture + playback agree on
+        // category options (`.allowBluetooth` HFP + `.allowBluetoothA2DP`).
+        // Previously this method set its own options that omitted
+        // A2DP, which forced TTS through the narrowband HFP profile
+        // whenever the W300 was also being used as the mic.
+        try MainActor.assumeIsolated {
+            try W300AudioBridge.shared.activate(for: .capture)
+        }
 
         let engine = AVAudioEngine()
         let input = engine.inputNode
@@ -77,6 +77,9 @@ public final class AudioCapture {
         inputNode = nil
         converter = nil
         pendingPCM16.removeAll(keepingCapacity: false)
+        Task { @MainActor in
+            W300AudioBridge.shared.deactivate(for: .capture)
+        }
     }
 
     private func handle(buffer: AVAudioPCMBuffer, onChunk: ChunkHandler) {

@@ -90,7 +90,8 @@ public final class HealthKitAdapter: VendorAdapter {
                     data: ["bpm": .int(Int(r.value))],
                     source: "apple_healthkit",
                     pipeline: "Apple Health",
-                    sampleSource: r.sampleSource
+                    sampleSource: r.sampleSource,
+                    sampleAt: r.sampleEndDate
                 )
             }
         }
@@ -101,7 +102,8 @@ public final class HealthKitAdapter: VendorAdapter {
                     data: ["current": .int(Int(r.value * 100))],
                     source: "apple_healthkit",
                     pipeline: "Apple Health",
-                    sampleSource: r.sampleSource
+                    sampleSource: r.sampleSource,
+                    sampleAt: r.sampleEndDate
                 )
             }
         }
