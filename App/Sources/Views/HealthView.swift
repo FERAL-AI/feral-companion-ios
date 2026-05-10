@@ -6,6 +6,12 @@ import SwiftUI
 struct HealthView: View {
     @EnvironmentObject var env: AppEnvironment
 
+    /// Drives the staleness label re-render every second so "5s ago"
+    /// becomes "6s ago" without waiting for a new reading. The Vitals
+    /// tab is a foreground-only screen so a 1Hz timer is acceptable.
+    @State private var stalenessTick: Date = Date()
+    private let stalenessTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
+
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
@@ -17,7 +23,8 @@ struct HealthView: View {
                         formatter: { "\(Int($0))" },
                         defaultUnit: "bpm",
                         accent: .red,
-                        icon: "heart.fill"
+                        icon: "heart.fill",
+                        now: stalenessTick
                     )
                     MetricCard(
                         title: "SpO2",
@@ -25,7 +32,8 @@ struct HealthView: View {
                         formatter: { "\(Int($0))" },
                         defaultUnit: "%",
                         accent: .blue,
-                        icon: "lungs.fill"
+                        icon: "lungs.fill",
+                        now: stalenessTick
                     )
                     MetricCard(
                         title: "Steps",
@@ -33,7 +41,8 @@ struct HealthView: View {
                         formatter: { "\(Int($0))" },
                         defaultUnit: "today",
                         accent: .green,
-                        icon: "figure.walk"
+                        icon: "figure.walk",
+                        now: stalenessTick
                     )
                     MetricCard(
                         title: "Temperature",
@@ -41,7 +50,8 @@ struct HealthView: View {
                         formatter: { String(format: "%.1f", $0) },
                         defaultUnit: "°C",
                         accent: .orange,
-                        icon: "thermometer.medium"
+                        icon: "thermometer.medium",
+                        now: stalenessTick
                     )
                 }
                 .padding(.horizontal)
@@ -53,6 +63,7 @@ struct HealthView: View {
             .padding(.vertical, 16)
         }
         .background(Color.black.ignoresSafeArea())
+        .onReceive(stalenessTimer) { now in stalenessTick = now }
     }
 
     private var hasAnyReading: Bool {
@@ -70,6 +81,9 @@ private struct MetricCard: View {
     let defaultUnit: String
     let accent: Color
     let icon: String
+    /// Re-rendered every second by the parent so "5s ago" → "6s ago"
+    /// without needing a new reading.
+    let now: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -77,10 +91,18 @@ private struct MetricCard: View {
                 Image(systemName: icon).foregroundStyle(accent)
                 Text(title).font(.caption).foregroundStyle(.secondary)
                 Spacer()
+                if let stale = stalenessBadge {
+                    Text(stale.label)
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(stale.tint.opacity(0.18), in: Capsule())
+                        .foregroundStyle(stale.tint)
+                }
             }
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(reading.map { formatter($0.value) } ?? "—")
                     .font(.system(size: 32, weight: .semibold, design: .rounded))
+                    .opacity(stalenessBadge?.dimValue == true ? 0.55 : 1.0)
                 Text(reading?.unit ?? defaultUnit)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -94,6 +116,19 @@ private struct MetricCard: View {
             Text(sourceLabel)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
+            // Audit-r8 brief #05: third line carries the staleness
+            // detail. Operator caught the previous build showing a
+            // constant "Heart Rate: 115" on a phone with no glasses
+            // connected — the value was a real Apple Watch reading
+            // from hours earlier, but nothing in the UI told the user
+            // it was old. The Brain already gates stale values out of
+            // chat / proactive alerts (perception/fusion.py
+            // `to_system_context`); the Vitals tab now matches.
+            if let detail = stalenessDetail {
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
@@ -110,6 +145,70 @@ private struct MetricCard: View {
             return "\(r.pipeline) · \(r.sampleSource)"
         }
         return r.pipeline
+    }
+
+    private struct Badge {
+        let label: String
+        let tint: Color
+        let dimValue: Bool
+    }
+
+    /// Mirrors the brain's freshness windows: live ≤ 60s, recent ≤ 5min,
+    /// stale > 5min, "unknown" when the brain didn't tell us. Matches
+    /// `_FRESH_WINDOW_S = 120s` in `agents/proactive_engine.py` for the
+    /// "stale" cutoff so Vitals and proactive alerts agree.
+    private var stalenessBadge: Badge? {
+        guard let r = reading else { return nil }
+        guard let at = r.sampleAt else {
+            return Badge(label: "unknown", tint: .gray, dimValue: true)
+        }
+        let age = now.timeIntervalSince(at)
+        if age < 0 {
+            return Badge(label: "live", tint: .green, dimValue: false)
+        }
+        if age <= 60 { return Badge(label: "live", tint: .green, dimValue: false) }
+        if age <= 120 { return Badge(label: "recent", tint: .yellow, dimValue: false) }
+        return Badge(label: "stale", tint: .orange, dimValue: true)
+    }
+
+    private var stalenessDetail: String? {
+        guard let r = reading else { return nil }
+        guard let at = r.sampleAt else {
+            return "Sample time not provided by source"
+        }
+        return "Sampled \(RelativeStalenessFormatter.shared.string(from: at, to: now))"
+    }
+}
+
+/// Compact "5s ago" / "3 min ago" / "2h ago" / "Mar 4, 14:02" formatter
+/// scaled to the Vitals card. Cached as a singleton because
+/// `RelativeDateTimeFormatter` is pricey to construct.
+enum RelativeStalenessFormatter {
+    static let shared = Formatter()
+
+    final class Formatter {
+        private let absolute: DateFormatter = {
+            let f = DateFormatter()
+            f.dateFormat = "MMM d, HH:mm"
+            return f
+        }()
+
+        func string(from past: Date, to now: Date) -> String {
+            let age = max(0, now.timeIntervalSince(past))
+            if age < 1 { return "just now" }
+            if age < 60 { return "\(Int(age))s ago" }
+            if age < 3600 {
+                let m = Int(age / 60)
+                return "\(m) min ago"
+            }
+            if age < 86_400 {
+                let h = Int(age / 3600)
+                let mm = Int((age.truncatingRemainder(dividingBy: 3600)) / 60)
+                if mm == 0 { return "\(h)h ago" }
+                return "\(h)h \(mm)m ago"
+            }
+            return absolute.string(from: past)
+        }
     }
 }
 

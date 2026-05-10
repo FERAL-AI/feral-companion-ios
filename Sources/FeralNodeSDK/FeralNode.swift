@@ -221,6 +221,40 @@ public actor FeralNode {
         try await socket.send(HUPFrame(type: "chat_request", payload: payload))
     }
 
+    /// Phase 5 / audit-r8 brief #04 — emit a GenUI surface interaction
+    /// to the brain. The brain handler is at
+    /// `feral-core/api/server.py` 1771–1814 (`elif msg.type ==
+    /// "genui_event":`) which routes through `_handle_app_action` for
+    /// the bound app. Field semantics match
+    /// `feral-core/models/protocol.py:GenUIEventPayload`:
+    ///   - `app_id`/`surface_id`/`screen_id` echo back what the brain
+    ///     sent on the `genui_push` so the dispatcher can locate the
+    ///     correct surface state.
+    ///   - `event_type` is one of `tap`, `toggle`, `slider`,
+    ///     `text_input` (matching the SwiftUI renderer's emission
+    ///     vocabulary).
+    ///   - `value` is optional; the wire codec accepts JSON-compatible
+    ///     primitives (string/int/double/bool/array/object).
+    public func sendGenUIEvent(
+        appId: String,
+        surfaceId: String,
+        screenId: String,
+        actionId: String,
+        eventType: String = "tap",
+        value: AnyCodable? = nil
+    ) async throws {
+        guard let socket, connected else { throw FeralNodeError.notConnected }
+        var payload: [String: AnyCodable] = [
+            "app_id": .string(appId),
+            "surface_id": .string(surfaceId),
+            "screen_id": .string(screenId),
+            "event_type": .string(eventType),
+            "action_id": .string(actionId),
+        ]
+        if let value { payload["value"] = value }
+        try await socket.send(HUPFrame(type: "genui_event", payload: payload))
+    }
+
     /// Begin a voice session. Field semantics match
     /// `feral-core/models/protocol.py` `VoiceSessionStartPayload`:
     /// `stream_id` REQUIRED, `sample_rate` REQUIRED, `channels`

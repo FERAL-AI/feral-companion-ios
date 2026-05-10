@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 /// "Devices" tab — the platform play. Lists every adapter the app
 /// knows about, grouped by integration class (iPhone built-ins,
@@ -8,8 +9,31 @@ struct DevicesView: View {
     @State private var bleScanCapability: String? = nil
     @State private var bleScanTitle: String = ""
 
+    @StateObject private var audioBridge = W300AudioBridge.shared
+
     var body: some View {
         List {
+            // Phase 6 / audit-r8 brief #03 — show the live audio
+            // route so the user sees whether voice is actually
+            // routed via the W300 vs the iPhone speaker. No more
+            // "voice working through the glasses" with the iPhone
+            // speaker still owning the route.
+            Section {
+                AudioRouteRow(snapshot: audioBridge.currentRoute,
+                              lastReason: audioBridge.lastRouteChangeReason)
+            } header: {
+                HStack {
+                    Image(systemName: "waveform.circle")
+                    Text("AUDIO ROUTE")
+                        .font(.caption.bold())
+                        .tracking(1)
+                }
+            } footer: {
+                Text("Live AVAudioSession route. Updates when iOS picks a different input/output (W300 connect/disconnect, AirPods, car BT, etc.).")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
             ForEach(DeviceStore.Entry.Category.allCases, id: \.rawValue) { category in
                 let entries = env.devices.entries.filter { $0.category == category }
                 if !entries.isEmpty {
@@ -80,6 +104,66 @@ struct DevicesView: View {
 /// String alone doesn't conform to Identifiable.
 private struct BLEScanCap: Identifiable {
     let id: String
+}
+
+private struct AudioRouteRow: View {
+    let snapshot: W300AudioBridge.RouteSnapshot
+    let lastReason: AVAudioSession.RouteChangeReason?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Output")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 60, alignment: .leading)
+                Text(snapshot.outputName)
+                    .font(.callout.weight(.medium))
+                Spacer()
+                if snapshot.isA2DPOutput {
+                    Text("A2DP").font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.green.opacity(0.18), in: Capsule())
+                        .foregroundStyle(.green)
+                }
+            }
+            HStack {
+                Text("Input")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 60, alignment: .leading)
+                Text(snapshot.inputName)
+                    .font(.callout.weight(.medium))
+                Spacer()
+                if snapshot.isBluetoothHeadset {
+                    Text("BT")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.18), in: Capsule())
+                        .foregroundStyle(.blue)
+                }
+            }
+            if let reason = lastReason {
+                Text("Last change: \(reasonLabel(reason))")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func reasonLabel(_ r: AVAudioSession.RouteChangeReason) -> String {
+        switch r {
+        case .unknown: return "unknown"
+        case .newDeviceAvailable: return "new device available"
+        case .oldDeviceUnavailable: return "device removed"
+        case .categoryChange: return "category change"
+        case .override: return "override"
+        case .wakeFromSleep: return "wake from sleep"
+        case .noSuitableRouteForCategory: return "no suitable route"
+        case .routeConfigurationChange: return "config change"
+        @unknown default: return "other"
+        }
+    }
 }
 
 private struct DeviceRow: View {

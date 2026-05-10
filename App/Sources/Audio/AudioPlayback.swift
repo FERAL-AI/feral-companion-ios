@@ -62,6 +62,7 @@ public final class AudioPlayback {
         player.stop()
         engine.stop()
         configured = false
+        W300AudioBridge.shared.deactivate(for: .playback)
     }
 
     private func ensureConfigured(sampleRate: Double) throws {
@@ -75,12 +76,10 @@ public final class AudioPlayback {
             configured = false
         }
 
-        let session = AVAudioSession.sharedInstance()
-        if session.category != .playAndRecord {
-            try session.setCategory(.playAndRecord, mode: .voiceChat,
-                                    options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers, .duckOthers])
-            try session.setActive(true, options: [])
-        }
+        // Phase 6 / audit-r8 brief #03: route session config through
+        // W300AudioBridge so capture + playback share `.allowBluetoothA2DP`
+        // (high-quality output) and the bridge knows we're playing.
+        try W300AudioBridge.shared.activate(for: .playback)
 
         guard let inputFormat = makeInputFormat(sampleRate: sampleRate) else { return }
 
