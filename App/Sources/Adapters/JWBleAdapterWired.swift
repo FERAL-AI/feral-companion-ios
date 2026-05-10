@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import JWBle
 
 /// Real, wired JieLi W300 vendor adapter. Replaces the SDK-shipped
@@ -25,6 +26,7 @@ public final class JWBleAdapterWired: VendorAdapter {
     private weak var attachedNode: FeralNode?
     private var pollTimer: Timer?
     private let pollInterval: TimeInterval
+    private var phaseObserver: AnyCancellable?
 
     public init(pollInterval: TimeInterval = 30) {
         self.pollInterval = pollInterval
@@ -42,17 +44,31 @@ public final class JWBleAdapterWired: VendorAdapter {
         }
         self.attachedNode = node
 
-        // The phone scans + bond/connection is driven by a separate
-        // BLE pairing UI flow in the host app (see DevicesView →
-        // "Scan & connect"). At attach time we just wire the
-        // emit pipeline; readings start firing once the connection
-        // callback flips `isConnected` to true.
+        // Subscribe to JWBleSession phase transitions so the FIRST
+        // sensor poll fires the moment the W300 reaches `.ready`
+        // (post-bond). Operator report 2026-05-09 round 4: previously
+        // we kicked the first poll on attach() which sent
+        // jwTestHRAction during bond and the W300 firmware dropped us.
+        // Now the phase-driven kick is firmware-safe AND reactive
+        // (no 30s wait for the next scheduled tick).
+        phaseObserver?.cancel()
+        phaseObserver = await MainActor.run {
+            JWBleSession.shared.$phase
+                .removeDuplicates()
+                .sink { [weak self] newPhase in
+                    if case .ready = newPhase {
+                        Task { [weak self] in await self?.pollOnce() }
+                    }
+                }
+        }
         startPollingIfNeeded()
     }
 
     public func detach() async {
         pollTimer?.invalidate()
         pollTimer = nil
+        phaseObserver?.cancel()
+        phaseObserver = nil
         attachedNode = nil
     }
 
@@ -136,10 +152,16 @@ public final class JWBleAdapterWired: VendorAdapter {
                 Task {
                     switch result {
                     case .success(let reading):
+                        // Forward `heart_rate_sample_ts` so the
+                        // brain's freshness gate (operator report
+                        // 2026-05-09) trusts this as live W300 data.
+                        // The W300 spot test JUST returned so
+                        // `Date()` is the genuine sample time.
                         try? await node.emit(eventType: "heart_rate", data: [
                             "bpm": .int(reading.bpm),
                             "is_wearing": .bool(reading.isWearing),
                             "source": .string("jw_health_glasses"),
+                            "heart_rate_sample_ts": .double(Date().timeIntervalSince1970),
                         ])
                         if let actionId = actionId {
                             try? await node.sendActionResponse(
@@ -172,6 +194,7 @@ public final class JWBleAdapterWired: VendorAdapter {
                             "high": .int(r.high),
                             "low": .int(r.low),
                             "source": .string("jw_health_glasses"),
+                            "spo2_sample_ts": .double(Date().timeIntervalSince1970),
                         ])
                         if let actionId = actionId {
                             try? await node.sendActionResponse(
@@ -290,14 +313,49 @@ public final class JWBleAdapterWired: VendorAdapter {
         pollTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             Task { await self?.pollOnce() }
         }
+        // Operator report 2026-05-09 round 4 (with full Xcode log):
+        // Firing the first poll IMMEDIATELY on attach was the source
+        // of the W300 disconnect-loop. JWBleManager.isConnected
+        // becomes true at the GATT level (after didConnectPeripheral)
+        // BEFORE the W300 firmware finishes bond+sync. Sending
+        // jwTestHRAction during that window makes the firmware drop
+        // the connection ("disconnected to W300 error: (null)" in the
+        // log). pollOnce now waits for `JWBleSession.shared.phase ==
+        // .ready` (which only flips after BondSuccess in our delegate
+        // — the firmware-safe handshake completion). No immediate
+        // first-poll kick — the gate inside pollOnce handles it on
+        // the first scheduled tick once `.ready` arrives.
     }
 
     private func pollOnce() async {
         guard let node = attachedNode else { return }
+        // Phase gate (see startPollingIfNeeded comment): only poll
+        // sensor commands when JWBleSession is fully .ready —
+        // sending HR test commands during bond confuses the W300
+        // firmware and triggers an immediate disconnect.
+        let phase = await MainActor.run { JWBleSession.shared.phase }
+        guard case .ready = phase else {
+            return
+        }
+        // isDeviceConnected is the SDK-level connectivity check;
+        // .ready already implies it but keep the belt-and-suspenders.
         guard W300SensorManager.shared.isDeviceConnected() else { return }
-        // Light cadence: HR + steps. SpO2/temp/UV are user-initiated
-        // because the device's own measurement cycle is long.
+        // Cadence:
+        //   * HR + steps: every poll (cheap, fast).
+        //   * SpO2: every 4th poll (~2 min) — JieLi's spot test takes
+        //     ~30s on the device and is power-hungry. The Vitals UI
+        //     also lets the user trigger spot reads on demand.
+        //   * Temperature: every 4th poll (~2 min) — same rationale.
+        // Reads happen serially because W300SensorManager rejects
+        // concurrent reads with `.deviceBusy`.
+        pollTickCount &+= 1
         await runHeartRate(actionId: nil, node: node)
         await runSteps(actionId: nil, node: node)
+        if pollTickCount % 4 == 0 {
+            await runSpO2(actionId: nil, node: node)
+            await runTemperature(actionId: nil, node: node)
+        }
     }
+
+    private var pollTickCount: UInt = 0
 }

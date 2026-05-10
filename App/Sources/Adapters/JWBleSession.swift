@@ -93,7 +93,24 @@ public final class JWBleSession: ObservableObject {
             DebugLog.shared.info("jwble: status=Connect (BLE pipe open, awaiting bond)")
 
         case .bondSuccess:
-            DebugLog.shared.info("jwble: status=BondSuccess")
+            // Operator report 2026-05-09: W300 firmware bonds + opens
+            // every audio characteristic (KEY_SETTING_Audio_RSP visible
+            // on FF03) but never emits .syncSuccess. Without that
+            // signal our phase stayed at .connecting forever, the
+            // Devices tab read "Connecting…", and JWBleAdapterWired's
+            // poll loop's `isDeviceConnected()` was happy but the UI
+            // looked broken. Promote bond → ready immediately;
+            // .syncSuccess (when it does fire) just refreshes the
+            // device name. JieLi's docs say syncSuccess is the
+            // strict success criterion, but practical observation
+            // with W300 is that bond is sufficient for sensor reads.
+            let bondName = JWBleManager.shareInstance().connectionModel.deviceName
+            DebugLog.shared.success("jwble: status=BondSuccess — promoting to .ready (\(bondName))")
+            phase = .ready(name: bondName)
+            emitGlassesStatus("ready", extra: [
+                "device_name": .string(bondName),
+                "promoted_from": .string("bond_success"),
+            ])
 
         case .bondFailure:
             DebugLog.shared.error("jwble: status=BondFailure")
@@ -103,6 +120,10 @@ public final class JWBleSession: ObservableObject {
         case .syncSuccess:
             let name = JWBleManager.shareInstance().connectionModel.deviceName
             DebugLog.shared.success("jwble: status=SyncSuccess — device ready (\(name))")
+            // Idempotent: bondSuccess already promoted us to .ready
+            // for W300 firmware that doesn't emit syncSuccess; this
+            // path covers devices that DO emit it (and refreshes the
+            // device name from the post-sync read).
             phase = .ready(name: name)
             emitGlassesStatus("ready", extra: ["device_name": .string(name)])
 
@@ -128,6 +149,11 @@ public final class JWBleSession: ObservableObject {
         case .timeOutDisconnect:
             DebugLog.shared.warning("jwble: TimeOutDisconnect — BLE comm timed out")
             phase = .failed(reason: "Communication timeout — glasses disconnected")
+            // Phase-1.5: tell the brain instantly. Without this emit
+            // the brain only learned via the 30s heartbeat sweep
+            // derating the row to stale; iOS UI was instant but the
+            // brain — and therefore the web dashboard — lagged.
+            emitGlassesStatus("disconnected", extra: ["reason": .string("timeout_disconnect")])
 
         case .deviceStatusChanges:
             DebugLog.shared.info("jwble: DeviceStatusChanges")
@@ -146,10 +172,24 @@ public final class JWBleSession: ObservableObject {
 
         case .disConnect:
             DebugLog.shared.warning("jwble: status=DisConnect")
+            // Phase-1.5: only report a brain-side disconnect when we
+            // were actually mid-link. A `.disConnect` callback in
+            // the `.idle` / `.scanning` phase is BLE noise (e.g.
+            // user backgrounded the scan modal); emitting then
+            // would falsely tell the brain we lost something we
+            // never had.
             if case .ready = phase {
                 phase = .failed(reason: "Glasses disconnected")
+                emitGlassesStatus(
+                    "disconnected",
+                    extra: ["reason": .string("ble_disconnect_after_ready")],
+                )
             } else if case .connecting = phase {
                 phase = .failed(reason: "Connection lost during setup")
+                emitGlassesStatus(
+                    "disconnected",
+                    extra: ["reason": .string("ble_disconnect_during_handshake")],
+                )
             }
 
         case .temp:

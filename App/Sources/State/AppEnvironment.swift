@@ -25,10 +25,16 @@ public final class AppEnvironment: ObservableObject {
     /// see connected" bug surfaced during live iPhone testing.
     private var cancellables: Set<AnyCancellable> = []
 
-    public init(connection: ConnectionStore, chat: ChatStore, history: ChatHistoryStore? = nil) {
+    public init(
+        connection: ConnectionStore,
+        chat: ChatStore,
+        history: ChatHistoryStore? = nil,
+        bluetoothMonitor: BluetoothSystemMonitor? = nil
+    ) {
         self.connection = connection
         self.chat = chat
         self.history = history ?? ChatHistoryStore()
+        self.bluetoothMonitor = bluetoothMonitor ?? BluetoothSystemMonitor()
         self.chat.bind(to: connection.brainClient)
         // Wire chat history persistence into the BrainClient so every
         // append to `transcript` is debounced-saved to disk under the
@@ -63,10 +69,25 @@ public final class AppEnvironment: ObservableObject {
             .store(in: &cancellables)
     }
 
-    /// Production wiring. Real `BrainClient`, real `DeviceStore`.
+    /// Singleton Bluetooth system-state monitor. Held on the live
+    /// environment so the `CBCentralManager` survives view-tree
+    /// rebuilds and can outlive any single `DeviceStore` instance.
+    public let bluetoothMonitor: BluetoothSystemMonitor
+
+    /// Production wiring. Real `BrainClient`, real `DeviceStore`,
+    /// real `CBCentralManager` observer + `JWBleSession` binding for
+    /// truthful Bluetooth-row status (Phase 1).
     public static func live() -> AppEnvironment {
         let conn = ConnectionStore()
         let chat = ChatStore()
+        let monitor = BluetoothSystemMonitor()
+        monitor.bootstrap()
+        // Single-writer rule for Bluetooth row status: the catalog
+        // derives every BT row from the system power state and the
+        // JWBle session phase, NOT from the synchronous activate path.
+        // A BT row never reads `.active` unless both signals agree.
+        conn.deviceStore.bindBluetoothMonitor(monitor)
+        conn.deviceStore.bindJWBleSession(JWBleSession.shared)
         // Bind HealthStore to DeviceStore so adapters can write
         // readings into the local Vitals UI directly. Note: we do NOT
         // auto-activate HealthKit on first launch — the user taps
@@ -88,7 +109,7 @@ public final class AppEnvironment: ObservableObject {
             DebugLog.shared.info("env: paired brain detected with empty caps — auto-activating apple_healthkit")
             conn.deviceStore.activate("apple_healthkit")
         }
-        return AppEnvironment(connection: conn, chat: chat)
+        return AppEnvironment(connection: conn, chat: chat, bluetoothMonitor: monitor)
     }
 
     // MARK: - Deep links

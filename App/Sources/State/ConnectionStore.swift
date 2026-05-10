@@ -31,6 +31,18 @@ public final class ConnectionStore: ObservableObject {
     private let defaults: UserDefaults
     private var brainStateCancellable: AnyCancellable?
 
+    /// Re-entry gate for ``connect()``. The state-based check on
+    /// ``brainClient.state`` cannot catch the window between
+    /// "decide to connect" and "BrainClient flips state to
+    /// .connecting" (BrainClient.connect awaits an internal
+    /// ``disconnect()`` first, so state stays whatever it was for
+    /// tens of milliseconds). Operator log 2026-05-08 showed two
+    /// `Daemon connecting` events for the same `device_id` only 91ms
+    /// apart, with a `node_bye reason=shutdown` between them — that's
+    /// the second connect tearing down the first. This flag closes
+    /// the race at the ConnectionStore boundary.
+    private var connectInFlight: Bool = false
+
     public init(defaults: UserDefaults = .standard,
                 brainClient: BrainClient? = nil,
                 pairingClient: PairingClient? = nil,
@@ -166,12 +178,39 @@ public final class ConnectionStore: ObservableObject {
 
     /// Connect (or reconnect) the brain client using the current
     /// stored brain URL + bearer. Auto-pulls in the loaded adapters.
+    ///
+    /// **Idempotency**: this is a no-op if the underlying
+    /// ``BrainClient`` is already in ``.connecting`` or ``.connected``.
+    /// Two paths can race to call ``connect()``:
+    ///   1. ``applyPairing`` auto-connects on success.
+    ///   2. ``scenePhase: .active`` reconnects whenever ``.paired``.
+    /// Both fire on return-from-permission during first-pair, and the
+    /// brain previously saw two `node_register` round-trips per pair —
+    /// which manifested as duplicate Devices rows on the dashboard
+    /// (operator report, 2026-05-08). The guard keeps a single round-
+    /// trip without dropping any genuine reconnect attempt (because
+    /// .disconnected / .reconnecting / .failed all fall through).
     public func connect() async {
         guard let brainURL = brainURL, let bearer = phoneBearer else {
             DebugLog.shared.error("connect: no paired brain")
             status = .error(message: "No paired brain.")
             return
         }
+        // Re-entry gate FIRST — closes the window the state-based
+        // guard can't see (see ``connectInFlight`` docstring).
+        guard !connectInFlight else {
+            DebugLog.shared.info("connect: another connect() is already in flight — skipping duplicate dial")
+            return
+        }
+        switch brainClient.state {
+        case .connecting, .connected:
+            DebugLog.shared.info("connect: brainClient already \(brainClient.state) — skipping duplicate dial")
+            return
+        case .disconnected, .reconnecting, .failed:
+            break
+        }
+        connectInFlight = true
+        defer { connectInFlight = false }
         guard let wsURL = PairingClient.websocketURL(from: brainURL) else {
             DebugLog.shared.error("connect: invalid brain URL \(brainURL.absoluteString)")
             status = .error(message: "Invalid brain URL.")

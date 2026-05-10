@@ -27,6 +27,15 @@ public final class BrainClient: ObservableObject {
 
     @Published public private(set) var state: State = .disconnected
 
+    /// Test-only seam used by `FeralCompanionTests` to drive the
+    /// idempotency guard inside `ConnectionStore.connect()` without
+    /// opening a real WebSocket. Must not be called from product code
+    /// (the underlying transport is the only legitimate state writer);
+    /// pinned by `_ConnectionStoreConnectIdempotencyTests`.
+    public func _setStateForTesting(_ newState: State) {
+        self.state = newState
+    }
+
     /// Latest text turns from the brain (oldest first). Hosts append
     /// user-typed messages here too so chat views render uniformly.
     @Published public private(set) var transcript: [BrainMessage] = []
@@ -50,11 +59,20 @@ public final class BrainClient: ObservableObject {
     /// when a new voice session opens.
     @Published public private(set) var voiceStreamId: String = UUID().uuidString
 
+    /// `true` while a phone-mic voice session is open (between
+    /// `startVoice()` and `stopVoice()`). Owned here so any view can
+    /// bind without duplicating capture state, and so app-level
+    /// lifecycle teardown (`scenePhase: .background`) can stop the
+    /// session cleanly without reaching into a SwiftUI view's
+    /// `@State`.
+    @Published public private(set) var voiceActive: Bool = false
+
     private var node: FeralNode?
     private var inboundTask: Task<Void, Never>?
     private let audioPlayback: AudioPlayback
     private weak var history: ChatHistoryStore?
     private var historyCancellables: Set<AnyCancellable> = []
+    private var audioCapture: AudioCapture?
 
     public init(audioPlayback: AudioPlayback? = nil) {
         self.audioPlayback = audioPlayback ?? AudioPlayback()
@@ -132,6 +150,15 @@ public final class BrainClient: ObservableObject {
 
         do {
             try await node.connect()
+            // Wire the JWBle session so glasses_status emits actually
+            // reach the brain. The audit confirmed bind(brainNode:)
+            // had zero call sites in the iOS tree before Phase 1 —
+            // this is the call site. Safe to run regardless of whether
+            // the user has activated the Theora capability: when the
+            // session phase later transitions to `.ready`/`.failed`,
+            // those emits are now delivered to the brain's
+            // node_subdevices store via `device_event` envelopes.
+            JWBleSession.shared.bind(brainNode: node)
             // Connection state flips to .connected when we observe
             // the first node_ack frame in handleInbound.
         } catch {
@@ -143,11 +170,25 @@ public final class BrainClient: ObservableObject {
     }
 
     public func disconnect() async {
+        // Tear down voice first so the WS doesn't drop while audio is
+        // mid-stream — the brain's voice_router prefers a clean
+        // is_final chunk to a half-open socket.
+        await stopVoice()
         inboundTask?.cancel()
         inboundTask = nil
         if let node = node {
-            try? await node.sendNodeBye(reason: "user_disconnect")
-            await node.disconnect()
+            // The SDK's ``disconnect(reason:)`` already emits a
+            // single ``node_bye`` frame with the caller-supplied
+            // reason. We previously emitted an explicit
+            // ``user_disconnect`` bye AND then called
+            // ``node.disconnect()`` which sent a second
+            // ``shutdown`` bye — the brain log only ever showed
+            // ``shutdown`` because the second frame raced past the
+            // first (operator report 2026-05-08:
+            // "node_bye reason=shutdown" right after register, even
+            // though the user explicitly disconnected). One bye,
+            // correctly labeled.
+            await node.disconnect(reason: "user_disconnect")
         }
         node = nil
         state = .disconnected
@@ -200,6 +241,44 @@ public final class BrainClient: ObservableObject {
         try await node.interruptVoiceSession(streamId: voiceStreamId)
     }
 
+    // MARK: - Voice lifecycle
+
+    /// Start a phone-mic voice session: open the brain-side voice
+    /// session, spin up `AudioCapture`, and begin streaming PCM16
+    /// chunks. `voiceActive` flips to `true` so any bound view sees
+    /// the live state without polling.
+    ///
+    /// Idempotent: a second call while a session is already running
+    /// is a no-op so the UI button can't double-allocate the engine.
+    public func startVoice() async throws {
+        if voiceActive { return }
+        try await startVoiceSession()
+        let capture = AudioCapture()
+        try capture.start { [weak self] chunk in
+            // The capture callback runs off the main actor on an
+            // AVAudioEngine tap queue. Hop back to the actor's send
+            // path; failures are logged but don't tear down capture
+            // (the brain's voice_router tolerates dropped chunks).
+            Task { [weak self] in
+                try? await self?.sendAudioChunk(chunk, isFinal: false)
+            }
+        }
+        self.audioCapture = capture
+        self.voiceActive = true
+    }
+
+    /// Stop the current phone-mic voice session. Sends an empty
+    /// `is_final: true` chunk so the brain's voice_router sees a
+    /// clean end-of-utterance, then tears down `AudioCapture`.
+    /// Safe to call when no session is running.
+    public func stopVoice() async {
+        guard voiceActive || audioCapture != nil else { return }
+        audioCapture?.stop()
+        audioCapture = nil
+        voiceActive = false
+        try? await sendAudioChunk(Data(), isFinal: true)
+    }
+
     // MARK: - Inbound dispatch
 
     private func handleInbound(_ frame: HUPFrame) async {
@@ -241,12 +320,38 @@ public final class BrainClient: ObservableObject {
                 if case .bool(let b) = frame.payload["is_partial"] ?? .null { return b }
                 return false
             }()
+            // Honor the explicit `role` field from the brain (added
+            // 2026-05-08 to fix the "every chat bubble looks like a
+            // user message" bug — iOS used to hardcode every
+            // transcript as `.user` regardless of who spoke). The
+            // brain always tags role on the wire now; we fall back
+            // to `.assistant` for missing-role frames because in
+            // practice the only legitimate untagged transcripts are
+            // OpenAI Realtime audio-out transcripts.
+            let roleString: String? = {
+                if case .string(let s) = frame.payload["role"] ?? .null { return s }
+                return nil
+            }()
+            // Defense-in-depth: if a brain on an older build is still
+            // leaking the legacy `[user] ` sentinel, strip it AND
+            // treat the message as user-spoken even when the role
+            // field is missing.
+            let hasLegacyUserPrefix = text.hasPrefix("[user] ")
+            let cleanText = hasLegacyUserPrefix
+                ? String(text.dropFirst("[user] ".count))
+                : text
+            let role: BrainMessage.Role = {
+                if let r = roleString, let parsed = BrainMessage.Role(rawValue: r) {
+                    return parsed
+                }
+                return hasLegacyUserPrefix ? .user : .assistant
+            }()
             if isPartial {
-                liveTranscript = text
+                liveTranscript = cleanText
             } else {
                 liveTranscript = nil
-                if !text.isEmpty {
-                    transcript.append(BrainMessage(role: .user, text: text))
+                if !cleanText.isEmpty {
+                    transcript.append(BrainMessage(role: role, text: cleanText))
                 }
             }
 

@@ -111,6 +111,9 @@ private struct DeviceRow: View {
         case .active:
             Label("Active", systemImage: "checkmark.circle.fill")
                 .font(.caption2).foregroundStyle(.green)
+        case .connecting:
+            Label("Connecting…", systemImage: "antenna.radiowaves.left.and.right")
+                .font(.caption2).foregroundStyle(.yellow)
         case .failed(let reason):
             Label(reason, systemImage: "exclamationmark.triangle.fill")
                 .font(.caption2).foregroundStyle(.orange).lineLimit(2)
@@ -128,10 +131,20 @@ private struct DeviceRow: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
         case .active:
+            // `deactivate` is the single writer for Bluetooth row
+            // teardown — it removes intent, drops the adapter, and
+            // also calls `JWBleSession.disconnect()` for BT caps so
+            // the radio link is torn down. We don't poke the session
+            // directly here.
             Button("Disconnect", role: .destructive) {
-                if entry.category == .bluetooth {
-                    JWBleSession.shared.disconnect()
-                }
+                env.devices.deactivate(entry.id)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        case .connecting:
+            // Surface a stop affordance while the BLE handshake is
+            // in flight so the user can bail out cleanly.
+            Button("Cancel", role: .destructive) {
                 env.devices.deactivate(entry.id)
             }
             .buttonStyle(.bordered)

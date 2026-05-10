@@ -38,12 +38,17 @@ targets:
     sources:
       - path: App/Sources
       - path: Sources/FeralNodeSDK
-      # FMDB is a runtime dependency of JWBle.framework. The vendor
-      # demo pulled it in via CocoaPods; we vendor the source files
-      # instead so the build is self-contained.
-      - path: Vendor/FMDB
-        type: folder
-        optional: true
+      # JWBle.framework bundles its own FMDatabase.o + FMResultSet.o
+      # but NOT the (FMDatabaseAdditions) category. Compile JUST the
+      # additions .m so its category methods (getTableSchema:, etc.)
+      # register with the runtime FMDatabase class shipped inside
+      # JWBle.framework. Do NOT add the rest of Vendor/FMDB to
+      # sources — that would duplicate-symbol against JWBle.
+      # Without this fix JieLi's JWBleDBModel.createTable crashes
+      # the app at SDK init with:
+      #   *** -[FMDatabase getTableSchema:]: unrecognized selector
+      - path: Vendor/FMDB/FMDatabaseAdditions.m
+      - path: Vendor/FMDB/FMDatabaseAdditions.h
     resources:
       - path: App/Assets.xcassets
       - path: App/LaunchScreen.storyboard
@@ -136,10 +141,32 @@ targets:
       - Tests/FeralCompanionTests
     dependencies:
       - target: FeralCompanion
+      # Vendor frameworks are needed for module resolution on the test
+      # bundle. `@testable import FeralCompanion` re-exposes types
+      # whose Swift signatures reference the vendor `import JWBle`
+      # statement (e.g. `JWBleSession.Phase`); without these listed
+      # here, compilation fails with "Unable to resolve module
+      # dependency: 'JWBle'". `embed: false` because the host app
+      # already embeds them — the test bundle loads against the host.
+      - framework: Vendor/JWBle.framework
+        embed: false
+        codeSign: false
+      - framework: Vendor/CocoaLumberjack.framework
+        embed: false
+        codeSign: false
     settings:
       base:
         BUNDLE_LOADER: $(TEST_HOST)
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/FeralCompanion.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/FeralCompanion
+        # Xcode 26 enforces "every signed bundle has an Info.plist".
+        # xcodegen no longer auto-injects one for unit-test bundles, so
+        # opt into the synthetic plist explicitly with a stable bundle
+        # identifier — otherwise the build dies with
+        #   "Cannot code sign because the target does not have an
+        #    Info.plist file and one is not being generated automatically"
+        # (Xcode 26.4 / iPhone 17 sim, 2026-05-08).
+        GENERATE_INFOPLIST_FILE: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: com.feral.companion.tests
 
 schemes:
   FeralCompanion:
