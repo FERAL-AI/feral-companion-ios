@@ -259,6 +259,12 @@ public final class DeviceStore: ObservableObject {
                 }
             }
         }
+        // Audit-r9 brief #06 B1 fix: the JWBle adapter must also write
+        // to local HealthStore so the Vitals tab reflects the W300
+        // stream (not just HealthKit). See JWBleAdapterWired comments.
+        if let jw = adapter as? JWBleAdapterWired, let store = healthStore {
+            jw.setHealthStore(store)
+        }
     }
 
     /// Drop user intent for the capability and remove its adapter. For
