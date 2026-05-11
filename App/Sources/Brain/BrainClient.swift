@@ -48,12 +48,29 @@ public final class BrainClient: ObservableObject {
     /// progress). Used by views to render typing indicators.
     @Published public private(set) var isAssistantSpeaking: Bool = false
 
-    /// Stable conversation id sent on every `chat_request`. The brain's
-    /// `ChatRequestPayload` requires a non-empty `session_id`. We
-    /// generate one per BrainClient lifetime so multiple turns share
-    /// orchestrator context. If the brain returns a different
-    /// `session_id` on the first `chat_response`, we adopt that.
-    @Published public private(set) var chatSessionId: String = UUID().uuidString
+    /// Conversation id sent on every `chat_request`.
+    ///
+    /// Audit-r9 fix — operator report 2026-05-10:
+    /// > "the chat and memory should be the same for my phone chat
+    /// >  and the webui for feral brain on the local brain right?"
+    ///
+    /// Yes. Until this fix, BrainClient minted `UUID().uuidString`
+    /// per app launch and sent it on every `chat_request`. The brain
+    /// honored that explicit id, so iOS chat ran in a `conversation_history`
+    /// keyed by that UUID — completely isolated from web's
+    /// `conversation_history[uuid4()]` for whichever WebSocket the
+    /// browser tab opened.
+    ///
+    /// Now we default to **empty string**. The brain's `chat_request`
+    /// resolver (`api/server.py` ~1486) treats empty as "use my
+    /// primary_session_id" — the per-install shared id that web
+    /// `/v1/session` also defaults to. The brain then echoes the
+    /// resolved id back in `chat_response.payload.session_id`, and
+    /// the existing handler at `case "chat_response":` (~306) adopts
+    /// it for subsequent turns. Net effect: phone + web share one
+    /// thread out of the box; an explicit "new chat" gesture would
+    /// set this back to a fresh UUID before the next send.
+    @Published public private(set) var chatSessionId: String = ""
 
     /// Stable voice stream id emitted on `voice_session_start`. Reset
     /// when a new voice session opens.
