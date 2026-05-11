@@ -24,12 +24,37 @@ public final class JWBleAdapterWired: VendorAdapter {
     ]
 
     private weak var attachedNode: FeralNode?
+    private weak var healthStore: HealthStore?
     private var pollTimer: Timer?
     private let pollInterval: TimeInterval
     private var phaseObserver: AnyCancellable?
 
-    public init(pollInterval: TimeInterval = 30) {
+    public init(pollInterval: TimeInterval = 30, healthStore: HealthStore? = nil) {
         self.pollInterval = pollInterval
+        self.healthStore = healthStore
+    }
+
+    /// Audit-r9 brief #06 B1 fix — operator report 2026-05-10:
+    /// "vitals page in iOS still showing fake data — sensors not
+    /// getting real-time accurate data."
+    ///
+    /// Root cause: `JWBleAdapterWired` previously emitted W300 reads
+    /// only via `node.emit(...)` to the brain, never to the local
+    /// `HealthStore`. So the Vitals tab rendered ONLY HealthKit data
+    /// (last Apple Watch reading, possibly hours old) regardless of
+    /// W300 activity. The new staleness label correctly tagged it as
+    /// stale, but the user sees "stale 6h ago" instead of "live · 5s
+    /// ago" because the W300 reading never lands in the UI store.
+    ///
+    /// Fix: same fan-out pattern `HealthKitAdapter.setHealthStore`
+    /// uses (`HealthKitAdapter.swift:37-39`). `DeviceStore.activate`
+    /// calls this immediately after instantiating the adapter for
+    /// `jw_health_glasses`. Each `run*` method writes to BOTH the
+    /// brain (`node.emit`) AND the local store (`healthStore.record`)
+    /// with explicit `sampleAt: Date()` so the staleness badge shows
+    /// "live · 0s ago".
+    public func setHealthStore(_ store: HealthStore) {
+        self.healthStore = store
     }
 
     // MARK: - VendorAdapter
@@ -157,12 +182,21 @@ public final class JWBleAdapterWired: VendorAdapter {
                         // 2026-05-09) trusts this as live W300 data.
                         // The W300 spot test JUST returned so
                         // `Date()` is the genuine sample time.
+                        let sampleAt = Date()
                         try? await node.emit(eventType: "heart_rate", data: [
                             "bpm": .int(reading.bpm),
                             "is_wearing": .bool(reading.isWearing),
                             "source": .string("jw_health_glasses"),
-                            "heart_rate_sample_ts": .double(Date().timeIntervalSince1970),
+                            "heart_rate_sample_ts": .double(sampleAt.timeIntervalSince1970),
                         ])
+                        // Audit-r9 B1: also write to local HealthStore
+                        // so the Vitals tab reflects the W300 stream
+                        // instead of only HealthKit.
+                        await self.recordToHealthStore(
+                            eventType: "heart_rate",
+                            data: ["bpm": .int(reading.bpm)],
+                            sampleAt: sampleAt
+                        )
                         if let actionId = actionId {
                             try? await node.sendActionResponse(
                                 actionId: actionId, success: true,
@@ -189,13 +223,20 @@ public final class JWBleAdapterWired: VendorAdapter {
                 Task {
                     switch result {
                     case .success(let r):
+                        let sampleAt = Date()
                         try? await node.emit(eventType: "spo2", data: [
                             "current": .int(r.current),
                             "high": .int(r.high),
                             "low": .int(r.low),
                             "source": .string("jw_health_glasses"),
-                            "spo2_sample_ts": .double(Date().timeIntervalSince1970),
+                            "spo2_sample_ts": .double(sampleAt.timeIntervalSince1970),
                         ])
+                        // Audit-r9 B1: also write to local HealthStore.
+                        await self.recordToHealthStore(
+                            eventType: "spo2",
+                            data: ["current": .int(r.current)],
+                            sampleAt: sampleAt
+                        )
                         if let actionId = actionId {
                             try? await node.sendActionResponse(
                                 actionId: actionId, success: true,
@@ -221,12 +262,24 @@ public final class JWBleAdapterWired: VendorAdapter {
                 Task {
                     switch result {
                     case .success(let r):
+                        // Audit-r9 brief #06 B2: previously this emit
+                        // omitted `temperature_sample_ts`, so the brain
+                        // and Vitals tab tagged W300 temperature reads
+                        // as "staleness unknown" even when live.
+                        let sampleAt = Date()
                         try? await node.emit(eventType: "temperature", data: [
                             "celsius": .double(Double(r.celsius)),
                             "fahrenheit": .double(Double(r.fahrenheit)),
                             "is_wearing": .bool(r.isWearing),
                             "source": .string("jw_health_glasses"),
+                            "temperature_sample_ts": .double(sampleAt.timeIntervalSince1970),
                         ])
+                        // Audit-r9 B1: also write to local HealthStore.
+                        await self.recordToHealthStore(
+                            eventType: "temperature",
+                            data: ["celsius": .double(Double(r.celsius))],
+                            sampleAt: sampleAt
+                        )
                         if let actionId = actionId {
                             try? await node.sendActionResponse(
                                 actionId: actionId, success: true,
@@ -281,12 +334,22 @@ public final class JWBleAdapterWired: VendorAdapter {
                 Task {
                     switch result {
                     case .success(let r):
+                        let sampleAt = Date()
                         try? await node.emit(eventType: "steps", data: [
                             "count": .int(r.steps),
                             "distance_m": .int(r.distance),
                             "calories_kcal": .int(r.calories),
                             "source": .string("jw_health_glasses"),
                         ])
+                        // Audit-r9 B1: also write to local HealthStore.
+                        // Steps don't carry a sample-ts (cumulative
+                        // counter); we still pass `sampleAt` so the
+                        // staleness label shows "live · 0s ago".
+                        await self.recordToHealthStore(
+                            eventType: "steps",
+                            data: ["count": .int(r.steps)],
+                            sampleAt: sampleAt
+                        )
                         if let actionId = actionId {
                             try? await node.sendActionResponse(
                                 actionId: actionId, success: true,
@@ -303,6 +366,30 @@ public final class JWBleAdapterWired: VendorAdapter {
                     cont.resume()
                 }
             }
+        }
+    }
+
+    // MARK: - Local HealthStore fan-out (audit-r9 brief #06 B1)
+
+    /// Mirror a successful W300 read into the local `HealthStore` so
+    /// the Vitals tab reflects glasses data in real time. Mirrors the
+    /// pattern in `HealthKitAdapter.emitEverywhere` (~286-300) but
+    /// for the BLE path. Always uses `source: "jw_health_glasses"` and
+    /// `pipeline: "Theora glasses"` so `MetricCard.sourceLabel` shows
+    /// "Theora glasses" instead of the bare capability id.
+    private func recordToHealthStore(
+        eventType: String, data: [String: AnyCodable], sampleAt: Date
+    ) async {
+        guard let store = healthStore else { return }
+        await MainActor.run {
+            store.record(
+                eventType: eventType,
+                data: data,
+                source: "jw_health_glasses",
+                pipeline: "Theora glasses",
+                sampleSource: "W300",
+                sampleAt: sampleAt
+            )
         }
     }
 
