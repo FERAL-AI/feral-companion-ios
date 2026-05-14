@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var env: AppEnvironment
     @Binding var showPairingSheet: Bool
+    @ObservedObject var onboarding: OnboardingController
     @State private var showLog = false
     @State private var probing = false
     @State private var lastProbeResult: String? = nil
@@ -96,6 +97,14 @@ struct SettingsView: View {
                 Text("Captures pair attempts, brain probes, adapter activations, and errors. No need to attach Xcode.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+            }
+
+            Section("Setup") {
+                Button {
+                    onboarding.reset()
+                } label: {
+                    Label("Re-run setup wizard", systemImage: "arrow.counterclockwise")
+                }
             }
 
             Section("About") {
