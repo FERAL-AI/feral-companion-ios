@@ -4,6 +4,7 @@ import SwiftUI
 /// The Chat tab is the front door: voice + text loop with the brain.
 struct RootView: View {
     @EnvironmentObject var env: AppEnvironment
+    @ObservedObject var onboarding: OnboardingController
     @State private var selectedTab = 0
     @State private var showPairingSheet = false
 
@@ -36,7 +37,7 @@ struct RootView: View {
             .tag(2)
 
             NavigationStack {
-                SettingsView(showPairingSheet: $showPairingSheet)
+                SettingsView(showPairingSheet: $showPairingSheet, onboarding: onboarding)
                     .navigationTitle("Settings")
             }
             .tabItem { Label("Settings", systemImage: "gearshape") }
@@ -107,6 +108,6 @@ struct ConnectionStatusBadge: View {
 }
 
 #Preview {
-    RootView()
+    RootView(onboarding: OnboardingController())
         .environmentObject(AppEnvironment.live())
 }
