@@ -8,6 +8,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var env: AppEnvironment
     @Binding var showPairingSheet: Bool
+    @ObservedObject var onboarding: OnboardingController
     @State private var showLog = false
     @State private var probing = false
     @State private var lastProbeResult: String? = nil
@@ -22,6 +23,7 @@ struct SettingsView: View {
                 }
                 debugCard
                 aboutCard
+                setupCard
             }
             .padding(FeralTheme.padLG)
         }
@@ -174,6 +176,37 @@ struct SettingsView: View {
             } label: {
                 HStack {
                     Text("Open log viewer")
+                        .font(.callout)
+                        .foregroundStyle(FeralTheme.textPrimary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(FeralTheme.textTertiary)
+                }
+                .padding(FeralTheme.padSM)
+                .background(FeralTheme.surface0, in: RoundedRectangle(cornerRadius: FeralTheme.radiusSM, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+        .feralCard(.thin, radius: .md)
+    }
+
+    // MARK: - Setup Card
+
+    private var setupCard: some View {
+        VStack(alignment: .leading, spacing: FeralTheme.padSM) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.counterclockwise")
+                    .foregroundStyle(FeralTheme.textSecondary)
+                Text("Setup")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(FeralTheme.textPrimary)
+            }
+            Button {
+                onboarding.reset()
+            } label: {
+                HStack {
+                    Text("Re-run setup wizard")
                         .font(.callout)
                         .foregroundStyle(FeralTheme.textPrimary)
                     Spacer()
