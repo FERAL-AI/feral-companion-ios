@@ -64,7 +64,7 @@ struct DevicesView: View {
             }
         }
         .scrollContentBackground(.hidden)
-        .background(Color.black.ignoresSafeArea())
+        .background(FeralTheme.bgDeep.ignoresSafeArea())
         .sheet(item: Binding(
             get: { bleScanCapability.map(BLEScanCap.init) },
             set: { newValue in bleScanCapability = newValue?.id }
