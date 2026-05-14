@@ -42,12 +42,20 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>FERAL plays music from your Apple Music library and the Apple Music catalog when you ask the brain to play a song.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>FERAL uses Bluetooth to connect to FERAL-compatible glasses and wristbands.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>FERAL uses Bluetooth to connect to FERAL-compatible glasses and wristbands.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>FERAL reads and writes events in your Calendar so the brain can answer scheduling questions and add events you ask for.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>FERAL reads and writes events in your Calendar so the brain can answer scheduling questions and add events you ask for.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>FERAL uses the camera to scan QR codes for pairing and to share scenes with the FERAL brain.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>FERAL looks up your contacts so the brain can resolve "call John" or "email Sarah" without you having to dictate phone numbers and email addresses.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>FERAL reads your health data from Apple Health to share with the FERAL brain when you ask it questions about your wellbeing.</string>
 	<key>NSHealthUpdateUsageDescription</key>
