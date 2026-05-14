@@ -161,6 +161,17 @@ public final class BrainClient: ObservableObject {
 
     // MARK: - Lifecycle
 
+    /// Always-on phone skills registered alongside the user-toggled
+    /// adapters on every connect. See `CallKitSkill` for the first
+    /// example; Phase 4b appends MusicKit / EventKit / Contacts /
+    /// Intents / Location / Photos / Camera / Health / Notes /
+    /// Screen here.
+    private static func alwaysOnSkills() -> [VendorAdapter] {
+        return [
+            CallKitSkill(),
+        ]
+    }
+
     /// Open the WebSocket and run `node_register`. The provided
     /// `adapters` are registered before connect so their capabilities
     /// land in the brain's first-ack.
@@ -177,6 +188,14 @@ public final class BrainClient: ObservableObject {
         let node = FeralNode(brainURL: brainURL, apiKey: apiKey, nodeID: nodeId)
         for adapter in adapters {
             await node.register(adapter: adapter)
+        }
+        // Phase 4a (audit-r10 overhaul) — always-on phone skills.
+        // These don't live in DeviceStore because they're not user-
+        // togglable devices; they're capabilities the phone itself
+        // exposes whenever it's connected to the brain. Adding new
+        // skills in Phase 4b means appending here.
+        for skill in Self.alwaysOnSkills() {
+            await node.register(adapter: skill)
         }
         self.node = node
 
