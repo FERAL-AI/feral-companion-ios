@@ -98,11 +98,27 @@ public actor FeralNode {
         )
         let encoder = JSONEncoder()
         let data = try encoder.encode(registerPayload)
-        guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard var dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw FeralNodeError.malformedFrame(underlying: NSError(
                 domain: "FeralNode", code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "node_register serialisation failed"]
             ))
+        }
+        // Phase 4 (audit-r10 overhaul) — broadcast skill manifests in
+        // `node_register.skills`. The brain's capability registry
+        // (Phase 5) reads these to know what `phone.*` actions this
+        // node can handle. Adapters that aren't full Skills (BLE
+        // peripherals like the W300) are not included here; only
+        // `Skill`-conforming adapters publish a manifest.
+        let skillManifests: [[String: Any]] = adapters.compactMap { adapter in
+            guard let skill = adapter as? Skill else { return nil }
+            guard let m = try? encoder.encode(skill.manifest),
+                  let mDict = try? JSONSerialization.jsonObject(with: m) as? [String: Any]
+            else { return nil }
+            return mDict
+        }
+        if !skillManifests.isEmpty {
+            dict["skills"] = skillManifests
         }
         try await socket.send(HUPFrame(
             type: "node_register",
