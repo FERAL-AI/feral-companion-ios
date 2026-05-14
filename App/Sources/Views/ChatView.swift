@@ -90,7 +90,7 @@ struct ChatView: View {
             //      anywhere in the message area resigns focus.
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    LazyVStack(alignment: .leading, spacing: 14) {
                         if env.chat.messages.isEmpty {
                             EmptyChatPlaceholder()
                                 .frame(maxWidth: .infinity)
@@ -99,16 +99,34 @@ struct ChatView: View {
                         ForEach(env.chat.messages) { msg in
                             ChatBubble(message: msg)
                                 .id(msg.id)
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .move(edge: .bottom)),
+                                    removal: .opacity
+                                ))
+                        }
+                        if env.brain.isAssistantSpeaking {
+                            TypingIndicator()
+                                .id("typing-indicator")
                         }
                     }
                     .padding()
+                    .animation(FeralTheme.springSnappy, value: env.chat.messages.count)
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .contentShape(Rectangle())
                 .onTapGesture { inputFocused = false }
                 .onChange(of: env.chat.messages.count) { _ in
                     if let last = env.chat.messages.last {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                        withAnimation(FeralTheme.springSnappy) {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
+                    }
+                }
+                .onChange(of: env.brain.isAssistantSpeaking) { speaking in
+                    if speaking {
+                        withAnimation(FeralTheme.springSnappy) {
+                            proxy.scrollTo("typing-indicator", anchor: .bottom)
+                        }
                     }
                 }
             }
@@ -231,15 +249,53 @@ struct ChatView: View {
     }
 }
 
+/// Animated three-dot typing indicator shown while the assistant streams.
+private struct TypingIndicator: View {
+    @State private var phase: Int = 0
+    private let timer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 5) {
+                ForEach(0..<3, id: \.self) { i in
+                    Circle()
+                        .fill(FeralTheme.textTertiary)
+                        .frame(width: 7, height: 7)
+                        .scaleEffect(phase == i ? 1.3 : 0.8)
+                        .opacity(phase == i ? 1.0 : 0.5)
+                        .animation(FeralTheme.springSnappy, value: phase)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(FeralTheme.surface1, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(FeralTheme.hairline, lineWidth: 0.5)
+            )
+            Spacer(minLength: 32)
+        }
+        .onReceive(timer) { _ in
+            phase = (phase + 1) % 3
+        }
+    }
+}
+
 private struct EmptyChatPlaceholder: View {
     @EnvironmentObject var env: AppEnvironment
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 14) {
             Image(systemName: "waveform.circle")
-                .font(.system(size: 64, weight: .thin))
-                .foregroundStyle(.secondary)
-            Text(headline).font(.title3.weight(.semibold))
-            Text(subhead).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .font(.system(size: 56, weight: .ultraLight))
+                .foregroundStyle(FeralTheme.accent.opacity(0.6))
+            Text(headline)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(FeralTheme.textPrimary)
+            Text(subhead)
+                .font(.callout)
+                .foregroundStyle(FeralTheme.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
         }
         .padding()
     }
