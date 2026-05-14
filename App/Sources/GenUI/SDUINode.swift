@@ -265,12 +265,20 @@ enum SDUINode: Equatable {
     /// description / Settings deeplink copy sourced from
     /// `agents/permission_card.py:PERMISSION_CATALOG` so the LLM can't
     /// hallucinate a non-existent Settings path.
+    ///
+    /// Phase 11 (audit-r10 overhaul) — the same shape also carries
+    /// macOS TCC denials emitted by `agents/tcc_card.py` when the
+    /// brain's desktop_control facade hits an Automation /
+    /// Accessibility / Screen Recording denial. `surface` is
+    /// "ios" (Phase 6) or "macos" (Phase 11); the deeplink fields
+    /// carry the platform-appropriate URL scheme.
     case permissionCard(
         permissionKey: String,
         title: String,
         description: String,
-        iosDeeplink: String,
-        iosDeeplinkLabel: String,
+        deeplink: String,
+        deeplinkLabel: String,
+        surface: String,  // "ios" | "macos"
         skillID: String?,
         action: String?,
         retryable: Bool
@@ -557,8 +565,30 @@ enum SDUINode: Equatable {
                 permissionKey: (obj["permission_key"] as? String) ?? "",
                 title: (obj["title"] as? String) ?? "FERAL needs a permission",
                 description: (obj["description"] as? String) ?? "",
-                iosDeeplink: (obj["ios_deeplink"] as? String) ?? "app-settings:",
-                iosDeeplinkLabel: (obj["ios_deeplink_label"] as? String) ?? "Open Settings",
+                deeplink: (obj["ios_deeplink"] as? String) ?? "app-settings:",
+                deeplinkLabel: (obj["ios_deeplink_label"] as? String) ?? "Open Settings",
+                surface: "ios",
+                skillID: obj["skill_id"] as? String,
+                action: obj["action"] as? String,
+                retryable: (obj["retryable"] as? Bool) ?? true
+            )
+        case "tcc_card", "TCCCard":
+            // Phase 11 (audit-r10 overhaul). Shape sourced from
+            // `agents/tcc_card.py:build_tcc_card`. The deeplink is a
+            // macOS-only `x-apple.systempreferences:` URL — iOS can't
+            // open it, so the rendering path shows a copy-pasteable
+            // note instead of a tap-to-open button. The brain
+            // already fires the deeplink on the Mac side when the
+            // card is minted, so the Settings pane is typically
+            // already in front of the operator by the time they
+            // glance at the phone.
+            return .permissionCard(
+                permissionKey: (obj["permission_key"] as? String) ?? "",
+                title: (obj["title"] as? String) ?? "FERAL needs a Mac permission",
+                description: (obj["description"] as? String) ?? "",
+                deeplink: (obj["macos_deeplink"] as? String) ?? "",
+                deeplinkLabel: (obj["macos_deeplink_label"] as? String) ?? "Open System Settings on your Mac",
+                surface: "macos",
                 skillID: obj["skill_id"] as? String,
                 action: obj["action"] as? String,
                 retryable: (obj["retryable"] as? Bool) ?? true

@@ -18,15 +18,21 @@ struct PermissionCardView: View {
     let description: String
     let deeplink: String
     let deeplinkLabel: String
+    /// "ios" for Phase 6 NSKey denials (tap deeplinks the iPhone),
+    /// "macos" for Phase 11 TCC denials (the Mac handles the deeplink
+    /// — the iPhone shows a read-only note).
+    let surface: String
 
     @State private var isOpening = false
+
+    private var isMacSurface: Bool { surface.lowercased() == "macos" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "lock.shield")
+                Image(systemName: isMacSurface ? "macpro.gen3" : "lock.shield")
                     .font(.title3)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(isMacSurface ? .blue : .orange)
                 Text(title)
                     .font(.headline)
                     .multilineTextAlignment(.leading)
@@ -40,27 +46,49 @@ struct PermissionCardView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
-                Button {
-                    openDeeplink()
-                } label: {
+                if isMacSurface {
+                    // The iPhone can't open an `x-apple.systempreferences:`
+                    // URL — that's a Mac-side URL scheme. The brain
+                    // already fires `open` on the Mac when the card
+                    // is minted, so the Settings pane is typically
+                    // already up. Surface this honestly instead of
+                    // a button that does nothing.
                     HStack(spacing: 6) {
-                        if isOpening {
-                            ProgressView().controlSize(.mini)
-                        } else {
-                            Image(systemName: "gearshape.fill")
-                        }
+                        Image(systemName: "arrow.left.arrow.right")
                         Text(deeplinkLabel)
-                            .fontWeight(.semibold)
+                            .fontWeight(.medium)
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
+                    .font(.callout)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
                     .background(
                         RoundedRectangle(cornerRadius: 10)
-                            .fill(Color.accentColor)
+                            .strokeBorder(Color.blue.opacity(0.4), lineWidth: 1)
                     )
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.blue)
+                } else {
+                    Button {
+                        openDeeplink()
+                    } label: {
+                        HStack(spacing: 6) {
+                            if isOpening {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                Image(systemName: "gearshape.fill")
+                            }
+                            Text(deeplinkLabel)
+                                .fontWeight(.semibold)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color.accentColor)
+                        )
+                        .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
 
                 if !permissionKey.isEmpty {
                     Text(permissionKey)
@@ -77,11 +105,20 @@ struct PermissionCardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.orange.opacity(0.08))
+                .fill(
+                    isMacSurface
+                        ? Color.blue.opacity(0.08)
+                        : Color.orange.opacity(0.08)
+                )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.orange.opacity(0.35), lineWidth: 1)
+                .strokeBorder(
+                    isMacSurface
+                        ? Color.blue.opacity(0.35)
+                        : Color.orange.opacity(0.35),
+                    lineWidth: 1
+                )
         )
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text("\(title). \(description)"))

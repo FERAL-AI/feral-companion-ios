@@ -263,8 +263,9 @@ private struct SDUINodeView: View {
             let permissionKey,
             let title,
             let description,
-            let iosDeeplink,
-            let iosDeeplinkLabel,
+            let deeplink,
+            let deeplinkLabel,
+            let surface,
             _,
             _,
             _
@@ -273,8 +274,9 @@ private struct SDUINodeView: View {
                 permissionKey: permissionKey,
                 title: title,
                 description: description,
-                deeplink: iosDeeplink,
-                deeplinkLabel: iosDeeplinkLabel
+                deeplink: deeplink,
+                deeplinkLabel: deeplinkLabel,
+                surface: surface
             )
         }
     }
