@@ -258,6 +258,24 @@ private struct SDUINodeView: View {
                     RoundedRectangle(cornerRadius: 4)
                         .strokeBorder(Color.orange.opacity(0.5), lineWidth: 1)
                 )
+
+        case .permissionCard(
+            let permissionKey,
+            let title,
+            let description,
+            let iosDeeplink,
+            let iosDeeplinkLabel,
+            _,
+            _,
+            _
+        ):
+            PermissionCardView(
+                permissionKey: permissionKey,
+                title: title,
+                description: description,
+                deeplink: iosDeeplink,
+                deeplinkLabel: iosDeeplinkLabel
+            )
         }
     }
 

@@ -259,6 +259,23 @@ enum SDUINode: Equatable {
     /// `MapView`, `Chart`, `Table`, `WebView`, `MediaPlayer`, etc.
     case placeholder(kind: String, label: String?)
 
+    /// Phase 6 (audit-r10 overhaul) — structured iOS permission denial.
+    /// The brain emits this when a Phase 4 skill returns
+    /// `permission_denied:<NSKey>`; the card carries pre-canned title /
+    /// description / Settings deeplink copy sourced from
+    /// `agents/permission_card.py:PERMISSION_CATALOG` so the LLM can't
+    /// hallucinate a non-existent Settings path.
+    case permissionCard(
+        permissionKey: String,
+        title: String,
+        description: String,
+        iosDeeplink: String,
+        iosDeeplinkLabel: String,
+        skillID: String?,
+        action: String?,
+        retryable: Bool
+    )
+
     /// Type id we don't recognise. The renderer surfaces this as a
     /// dashed-border debug stub so the operator can see exactly what
     /// the brain sent that we don't know how to draw.
@@ -533,6 +550,19 @@ enum SDUINode: Equatable {
         case "MapView", "GraphView", "Chart", "ChartView", "Table", "TableView",
              "WebView", "VideoPlayer", "AudioPlayer", "MediaPlayer", "CodeBlock":
             return .placeholder(kind: typeRaw, label: obj["label"] as? String)
+        case "permission_card", "PermissionCard":
+            // Phase 6 (audit-r10 overhaul). Shape sourced from
+            // `agents/permission_card.py:build_permission_card`.
+            return .permissionCard(
+                permissionKey: (obj["permission_key"] as? String) ?? "",
+                title: (obj["title"] as? String) ?? "FERAL needs a permission",
+                description: (obj["description"] as? String) ?? "",
+                iosDeeplink: (obj["ios_deeplink"] as? String) ?? "app-settings:",
+                iosDeeplinkLabel: (obj["ios_deeplink_label"] as? String) ?? "Open Settings",
+                skillID: obj["skill_id"] as? String,
+                action: obj["action"] as? String,
+                retryable: (obj["retryable"] as? Bool) ?? true
+            )
         default:
             return .unknown(typeName: typeRaw)
         }
