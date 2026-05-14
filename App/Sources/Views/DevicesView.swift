@@ -64,7 +64,7 @@ struct DevicesView: View {
             }
         }
         .scrollContentBackground(.hidden)
-        .background(Color.black.ignoresSafeArea())
+        .background(FeralTheme.bgDeep.ignoresSafeArea())
         .sheet(item: Binding(
             get: { bleScanCapability.map(BLEScanCap.init) },
             set: { newValue in bleScanCapability = newValue?.id }
@@ -122,38 +122,40 @@ private struct AudioRouteRow: View {
             HStack {
                 Text("Output")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(FeralTheme.textTertiary)
                     .frame(width: 60, alignment: .leading)
                 Text(snapshot.outputName)
                     .font(.callout.weight(.medium))
+                    .foregroundStyle(FeralTheme.textPrimary)
                 Spacer()
                 if snapshot.isA2DPOutput {
                     Text("A2DP").font(.caption2.weight(.semibold))
                         .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Color.green.opacity(0.18), in: Capsule())
-                        .foregroundStyle(.green)
+                        .background(FeralTheme.stateLiveSoft, in: Capsule())
+                        .foregroundStyle(FeralTheme.stateLive)
                 }
             }
             HStack {
                 Text("Input")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(FeralTheme.textTertiary)
                     .frame(width: 60, alignment: .leading)
                 Text(snapshot.inputName)
                     .font(.callout.weight(.medium))
+                    .foregroundStyle(FeralTheme.textPrimary)
                 Spacer()
                 if snapshot.isBluetoothHeadset {
                     Text("BT")
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Color.blue.opacity(0.18), in: Capsule())
-                        .foregroundStyle(.blue)
+                        .background(FeralTheme.accentSoft, in: Capsule())
+                        .foregroundStyle(FeralTheme.accent)
                 }
             }
             if let reason = lastReason {
                 Text("Last change: \(reasonLabel(reason))")
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(FeralTheme.textTertiary)
             }
         }
     }
@@ -181,10 +183,12 @@ private struct DeviceRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(entry.displayName).font(.body.weight(.semibold))
+                Text(entry.displayName)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(FeralTheme.textPrimary)
                 Text(entry.summary)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(FeralTheme.textSecondary)
                     .multilineTextAlignment(.leading)
                 statusLabel
             }
@@ -198,19 +202,20 @@ private struct DeviceRow: View {
     private var statusLabel: some View {
         switch entry.status {
         case .available:
-            Text("Ready to connect").font(.caption2).foregroundStyle(.tertiary)
+            Text("Ready to connect")
+                .font(.caption2).foregroundStyle(FeralTheme.textTertiary)
         case .active:
             Label("Active", systemImage: "checkmark.circle.fill")
-                .font(.caption2).foregroundStyle(.green)
+                .font(.caption2).foregroundStyle(FeralTheme.stateLive)
         case .connecting:
             Label("Connecting…", systemImage: "antenna.radiowaves.left.and.right")
-                .font(.caption2).foregroundStyle(.yellow)
+                .font(.caption2).foregroundStyle(FeralTheme.stateWarn)
         case .failed(let reason):
             Label(reason, systemImage: "exclamationmark.triangle.fill")
-                .font(.caption2).foregroundStyle(.orange).lineLimit(2)
+                .font(.caption2).foregroundStyle(FeralTheme.stateError).lineLimit(2)
         case .unsupported(let reason):
             Label(reason, systemImage: "wrench.and.screwdriver")
-                .font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+                .font(.caption2).foregroundStyle(FeralTheme.textTertiary).lineLimit(2)
         }
     }
 
@@ -219,33 +224,36 @@ private struct DeviceRow: View {
         switch entry.status {
         case .available:
             Button(connectLabel) { onConnect() }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(FeralTheme.accentSoft, in: Capsule())
+                .foregroundStyle(FeralTheme.accent)
         case .active:
-            // `deactivate` is the single writer for Bluetooth row
-            // teardown — it removes intent, drops the adapter, and
-            // also calls `JWBleSession.disconnect()` for BT caps so
-            // the radio link is torn down. We don't poke the session
-            // directly here.
-            Button("Disconnect", role: .destructive) {
+            Button("Disconnect") {
                 env.devices.deactivate(entry.id)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(FeralTheme.stateErrorSoft, in: Capsule())
+            .foregroundStyle(FeralTheme.stateError)
         case .connecting:
-            // Surface a stop affordance while the BLE handshake is
-            // in flight so the user can bail out cleanly.
-            Button("Cancel", role: .destructive) {
+            Button("Cancel") {
                 env.devices.deactivate(entry.id)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(FeralTheme.stateWarnSoft, in: Capsule())
+            .foregroundStyle(FeralTheme.stateWarn)
         case .failed:
             Button("Retry") { onConnect() }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(FeralTheme.surface1, in: Capsule())
+                .foregroundStyle(FeralTheme.textSecondary)
         case .unsupported:
-            Text("Soon").font(.caption2).foregroundStyle(.tertiary)
+            Text("Soon")
+                .font(.caption2)
+                .foregroundStyle(FeralTheme.textTertiary)
         }
     }
 
