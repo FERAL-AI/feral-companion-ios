@@ -42,10 +42,19 @@ public final class AudioPlayback {
             }
         }
 
-        // Schedule the buffer. The player plays back at the device's
-        // output rate; AVAudioEngine handles any rate adaptation
-        // through the connection format declared at configure time.
-        player.scheduleBuffer(pcmBuffer, completionHandler: nil)
+        // Phase 8 (audit-r10 overhaul) — auto-mute the mic for the
+        // duration of TTS playback. Belt-and-suspenders alongside
+        // the `.voiceChat`-mode system AEC: even on a loudspeaker
+        // playback into a built-in mic, no audio chunks reach the
+        // brain while the assistant is talking, so the brain's
+        // realtime VAD can't trigger on its own speech.
+        VoiceMuteController.shared.startedPlayingTTS()
+        outstandingBuffers += 1
+        player.scheduleBuffer(pcmBuffer, completionHandler: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.bufferDidFinish()
+            }
+        })
         if !player.isPlaying {
             player.play()
         }
@@ -56,13 +65,30 @@ public final class AudioPlayback {
     /// barges in via `speech_started`).
     public func stopAndDrain() async {
         player.stop()
+        outstandingBuffers = 0
+        VoiceMuteController.shared.stoppedPlayingTTS()
     }
 
     public func teardown() {
         player.stop()
         engine.stop()
         configured = false
+        outstandingBuffers = 0
+        VoiceMuteController.shared.stoppedPlayingTTS()
         W300AudioBridge.shared.deactivate(for: .playback)
+    }
+
+    /// Count of scheduled buffers that haven't yet hit their
+    /// completion handler. Lowered by `bufferDidFinish()`; when it
+    /// hits zero we release the TTS auto-mute so the mic resumes
+    /// streaming user audio to the brain.
+    private var outstandingBuffers: Int = 0
+
+    private func bufferDidFinish() {
+        if outstandingBuffers > 0 { outstandingBuffers -= 1 }
+        if outstandingBuffers == 0 {
+            VoiceMuteController.shared.stoppedPlayingTTS()
+        }
     }
 
     private func ensureConfigured(sampleRate: Double) throws {

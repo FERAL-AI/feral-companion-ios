@@ -63,6 +63,15 @@ public final class AudioCapture {
 
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             guard let self else { return }
+            // Phase 8 (audit-r10 overhaul) — mute check. We do NOT
+            // tear down the tap when muted: keeping the engine warm
+            // preserves the system AEC state so unmute resumes
+            // instantly without a "first half-second is full of
+            // echo" warm-up. The cost of discarding samples is
+            // negligible vs the latency hit of restart.
+            if VoiceMuteController.shared.isMuted {
+                return
+            }
             self.handle(buffer: buffer, onChunk: onChunk)
         }
 

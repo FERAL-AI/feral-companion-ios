@@ -22,6 +22,12 @@ final class ChatComposer: ObservableObject {
 struct ChatView: View {
     @EnvironmentObject var env: AppEnvironment
     @StateObject private var composer = ChatComposer()
+    // Phase 8 (audit-r10 overhaul) — observe the shared mute
+    // controller so the mute icon swaps state without polling.
+    // Auto-mute during TTS playback is reflected in `.autoMuted` but
+    // the button only binds to `.userMuted` (user intent), so an
+    // assistant utterance doesn't flicker the icon.
+    @ObservedObject private var muteController = VoiceMuteController.shared
     @State private var showConversationsSheet = false
     @FocusState private var inputFocused: Bool
 
@@ -130,6 +136,25 @@ struct ChatView: View {
                         .foregroundStyle(canSend ? Color.green : Color.gray)
                 }
                 .disabled(!canSend)
+
+                // Phase 8 (audit-r10 overhaul) — mute toggle. Only
+                // visible while a voice session is live so the
+                // composer doesn't grow extra controls during text
+                // chat. Reads the shared `VoiceMuteController` so
+                // its state survives Voice on/off cycles and
+                // synchronises with AudioPlayback auto-mute.
+                if env.brain.voiceActive {
+                    Button {
+                        VoiceMuteController.shared.toggleUserMute()
+                    } label: {
+                        Image(systemName: muteController.userMuted
+                              ? "mic.slash.fill"
+                              : "mic.slash")
+                            .font(.title2)
+                            .foregroundStyle(muteController.userMuted ? .orange : .secondary)
+                    }
+                    .accessibilityLabel(muteController.userMuted ? "Unmute" : "Mute")
+                }
 
                 Button {
                     if env.brain.state.isConnected {
