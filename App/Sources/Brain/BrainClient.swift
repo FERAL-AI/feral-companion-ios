@@ -584,6 +584,80 @@ public final class BrainClient: ObservableObject {
         if case .connecting(let url) = state { return url }
         throw BrainClientError.notConnected
     }
+
+    // MARK: - Phase 9 (audit-r10) — backgrounded chat resume
+
+    /// Position of the last brain-originated message we know about,
+    /// expressed as the `ts_ms` returned by the brain's primary
+    /// transcript endpoint. Used as `since_ms` on resume so the
+    /// reconcile call only fetches genuinely new turns.
+    private var lastSeenTranscriptTs: Int = 0
+
+    /// Fetch the brain's authoritative primary-session transcript
+    /// over REST and append any messages we don't already have to
+    /// `transcript`. Call from `scenePhase: .active` after the
+    /// WebSocket has reconnected — without this round-trip, replies
+    /// the brain emitted while iOS was backgrounded are lost forever
+    /// (the WS dropped them on the way out).
+    ///
+    /// Idempotent. Safe to call repeatedly; the `since_ms` cursor
+    /// makes the second call a no-op when no new turns landed.
+    public func reconcileTranscriptFromBrain() async {
+        let brainURL: URL
+        do { brainURL = try extractBrainURL() } catch { return }
+        // The brain URL is a WebSocket (`ws://` / `wss://`); rewrite
+        // the scheme + drop the WS path component to hit `/api/...`.
+        guard let httpBase = Self.httpBase(from: brainURL) else { return }
+        guard let endpoint = URL(string: "/api/sessions/primary/transcript?since_ms=\(lastSeenTranscriptTs)&limit=200", relativeTo: httpBase) else {
+            return
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: endpoint)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return }
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            guard let messages = json["messages"] as? [[String: Any]] else { return }
+
+            for entry in messages {
+                let roleStr = (entry["role"] as? String) ?? ""
+                let text = (entry["text"] as? String) ?? ""
+                let ts = (entry["ts_ms"] as? Int) ?? 0
+                guard !text.isEmpty,
+                      let role = BrainMessage.Role(rawValue: roleStr) else { continue }
+                // De-dupe by (role, text) against the tail of the
+                // local transcript — covers the case where the user
+                // sent a message that was both echoed locally AND
+                // recorded in the brain's history.
+                if !transcript.contains(where: { $0.role == role && $0.text == text }) {
+                    transcript.append(BrainMessage(role: role, text: text))
+                }
+                if ts > lastSeenTranscriptTs { lastSeenTranscriptTs = ts }
+            }
+        } catch {
+            // Reconcile is best-effort. A network failure leaves the
+            // local transcript untouched; the next reconcile call
+            // retries with the same `since_ms` cursor.
+        }
+    }
+
+    /// Map `ws://host:port` or `wss://host:port` → `http://host:port`
+    /// / `https://host:port`. Returns nil for unexpected schemes so
+    /// the caller can short-circuit cleanly.
+    private static func httpBase(from wsURL: URL) -> URL? {
+        var components = URLComponents(url: wsURL, resolvingAgainstBaseURL: false)
+        switch components?.scheme {
+        case "ws": components?.scheme = "http"
+        case "wss": components?.scheme = "https"
+        case "http", "https": break
+        default: return nil
+        }
+        // Strip any WS endpoint path so the relative `/api/...` URL
+        // resolves against the host root.
+        components?.path = ""
+        components?.query = nil
+        components?.fragment = nil
+        return components?.url
+    }
 }
 
 public struct BrainMessage: Identifiable, Equatable {

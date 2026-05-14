@@ -99,6 +99,14 @@ struct FeralCompanionApp: App {
                 // previously paired a JWBle peripheral; the session
                 // itself bails if the persisted UUID is missing.
                 JWBleSession.shared.attemptAutoReconnect()
+                // Phase 9 (audit-r10 overhaul) — after the WS comes
+                // back, pull the brain's authoritative primary-
+                // session transcript and merge any turns we missed
+                // while backgrounded. Operator complaint: "chat
+                // stops after a single answer instead of continuing"
+                // — when iOS suspends mid-reply the WS drops the
+                // tokens, this reconcile recovers them.
+                await environment.brain.reconcileTranscriptFromBrain()
             }
         case .inactive:
             // Transient state during transitions — reset the
