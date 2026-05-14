@@ -109,7 +109,17 @@ public final class W300AudioBridge: ObservableObject {
                 // also acting as the mic. Adding it lets the system
                 // pick the better profile per direction.
                 .allowBluetoothA2DP,
-                .mixWithOthers,
+                // Phase 8 (audit-r10 overhaul) — `.mixWithOthers`
+                // was REMOVED. It coexists badly with `.voiceChat`
+                // mode's loudspeaker echo cancellation: iOS hands
+                // the speaker output through a non-AEC mix path
+                // when this flag is set, and the built-in mic then
+                // picks up the assistant's own TTS — exactly the
+                // "voice itself echoes, replying to its own audio
+                // when not using headphones" operator complaint.
+                // `.duckOthers` stays so background audio (Music,
+                // podcasts) ducks while FERAL is speaking, without
+                // disabling AEC.
                 .duckOthers,
             ]
         )
