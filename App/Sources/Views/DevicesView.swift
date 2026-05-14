@@ -13,6 +13,13 @@ struct DevicesView: View {
 
     var body: some View {
         List {
+            // Phase 10 (audit-r10 overhaul) — at-a-glance answer to
+            // "what does the brain see right now?". Polls
+            // `/api/capabilities` (Phase 5) every 5s while this tab
+            // is open. Closes the operator complaint that the iOS
+            // app didn't surface the brain's network of nodes.
+            BrainNetworkSection()
+
             // Phase 6 / audit-r8 brief #03 — show the live audio
             // route so the user sees whether voice is actually
             // routed via the W300 vs the iPhone speaker. No more

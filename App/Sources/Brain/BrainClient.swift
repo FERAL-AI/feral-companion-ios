@@ -585,6 +585,18 @@ public final class BrainClient: ObservableObject {
         throw BrainClientError.notConnected
     }
 
+    /// Phase 10 (audit-r10 overhaul) — public HTTP base for the
+    /// currently-paired brain. Returns `http://host:port` / `https://host:port`
+    /// derived from the WebSocket URL we've been using for HUP. Nil
+    /// when no brain is connected (or connecting). Consumed by the
+    /// Brain Devices section in `DevicesView` so it can hit
+    /// `/api/capabilities` without re-deriving the URL.
+    public var brainHTTPBase: URL? {
+        let wsURL: URL
+        do { wsURL = try extractBrainURL() } catch { return nil }
+        return Self.httpBase(from: wsURL)
+    }
+
     // MARK: - Phase 9 (audit-r10) — backgrounded chat resume
 
     /// Position of the last brain-originated message we know about,
