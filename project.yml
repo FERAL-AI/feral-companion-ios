@@ -94,6 +94,11 @@ targets:
         NSHealthShareUsageDescription: "FERAL reads your health data from Apple Health to share with the FERAL brain when you ask it questions about your wellbeing."
         NSHealthUpdateUsageDescription: "FERAL writes summaries to Apple Health when you ask the FERAL brain to log a workout or vital."
         NSLocationWhenInUseUsageDescription: "FERAL shares your approximate location with the FERAL brain for context-aware assistance."
+        # Phase 4b skills — Contacts, Apple Music, Calendar usage strings.
+        NSContactsUsageDescription: "FERAL looks up your contacts so the brain can resolve \"call John\" or \"email Sarah\" without you having to dictate phone numbers and email addresses."
+        NSAppleMusicUsageDescription: "FERAL plays music from your Apple Music library and the Apple Music catalog when you ask the brain to play a song."
+        NSCalendarsFullAccessUsageDescription: "FERAL reads and writes events in your Calendar so the brain can answer scheduling questions and add events you ask for."
+        NSCalendarsUsageDescription: "FERAL reads and writes events in your Calendar so the brain can answer scheduling questions and add events you ask for."
         # URL scheme for feral:// deep links (pairing payloads).
         CFBundleURLTypes:
           - CFBundleTypeRole: Viewer

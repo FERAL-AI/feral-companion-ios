@@ -162,14 +162,21 @@ public final class BrainClient: ObservableObject {
     // MARK: - Lifecycle
 
     /// Always-on phone skills registered alongside the user-toggled
-    /// adapters on every connect. See `CallKitSkill` for the first
-    /// example; Phase 4b appends MusicKit / EventKit / Contacts /
-    /// Intents / Location / Photos / Camera / Health / Notes /
-    /// Screen here.
+    /// adapters on every connect. See `CallKitSkill` (Phase 4a) for
+    /// the first example. Phase 4b adds the demo trio: ContactsSkill
+    /// (so "call John" resolves to a real phone number),
+    /// MusicKitSkill (Apple Music playback), and EventKitSkill
+    /// (read/create calendar events).
     private static func alwaysOnSkills() -> [VendorAdapter] {
-        return [
+        var skills: [VendorAdapter] = [
             CallKitSkill(),
+            ContactsSkill(),
+            EventKitSkill(),
         ]
+        if #available(iOS 16.0, *) {
+            skills.append(MusicKitSkill())
+        }
+        return skills
     }
 
     /// Open the WebSocket and run `node_register`. The provided
