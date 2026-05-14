@@ -22,10 +22,10 @@ struct RootView: View {
             .tag(0)
 
             NavigationStack {
-                HealthView()
-                    .navigationTitle("Vitals")
+                ContextView()
+                    .navigationTitle("Context")
             }
-            .tabItem { Label("Vitals", systemImage: "heart.fill") }
+            .tabItem { Label("Context", systemImage: "brain") }
             .tag(1)
 
             NavigationStack {
