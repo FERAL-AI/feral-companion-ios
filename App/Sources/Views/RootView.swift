@@ -4,7 +4,6 @@ import SwiftUI
 /// The Chat tab is the front door: voice + text loop with the brain.
 struct RootView: View {
     @EnvironmentObject var env: AppEnvironment
-    @ObservedObject var onboarding: OnboardingController
     @State private var selectedTab = 0
     @State private var showPairingSheet = false
 
@@ -37,7 +36,7 @@ struct RootView: View {
             .tag(2)
 
             NavigationStack {
-                SettingsView(showPairingSheet: $showPairingSheet, onboarding: onboarding)
+                SettingsView(showPairingSheet: $showPairingSheet)
                     .navigationTitle("Settings")
             }
             .tabItem { Label("Settings", systemImage: "gearshape") }
@@ -48,33 +47,19 @@ struct RootView: View {
                 .environmentObject(env)
         }
         .onAppear {
-            configureTabBarAppearance()
+            // If we have a saved pairing but aren't connected, kick
+            // off a connection automatically.
             if case .paired = env.connection.status {
                 Task { await env.connection.connect() }
             }
+            // If we have no pairing at all, offer the sheet.
             if case .unpaired = env.connection.status, !showPairingSheet {
+                // Don't auto-present on first run; let the user reach
+                // Settings or tap the badge in Chat to start pairing.
             }
         }
         .preferredColorScheme(.dark)
-        .tint(FeralTheme.accent)
-    }
-
-    private func configureTabBarAppearance() {
-        let appearance = UITabBarAppearance()
-        appearance.configureWithDefaultBackground()
-        appearance.backgroundColor = UIColor(FeralTheme.bgDeep.opacity(0.85))
-        appearance.backgroundEffect = UIBlurEffect(style: .systemThinMaterialDark)
-        UITabBar.appearance().standardAppearance = appearance
-        UITabBar.appearance().scrollEdgeAppearance = appearance
-
-        let navAppearance = UINavigationBarAppearance()
-        navAppearance.configureWithDefaultBackground()
-        navAppearance.backgroundColor = UIColor(FeralTheme.bgDeep.opacity(0.7))
-        navAppearance.backgroundEffect = UIBlurEffect(style: .systemThinMaterialDark)
-        navAppearance.titleTextAttributes = [.foregroundColor: UIColor(FeralTheme.textPrimary)]
-        navAppearance.largeTitleTextAttributes = [.foregroundColor: UIColor(FeralTheme.textPrimary)]
-        UINavigationBar.appearance().standardAppearance = navAppearance
-        UINavigationBar.appearance().scrollEdgeAppearance = navAppearance
+        .tint(.green)
     }
 }
 
@@ -87,27 +72,26 @@ struct ConnectionStatusBadge: View {
         let (color, text) = badgeFor(status)
         HStack(spacing: 6) {
             Circle().fill(color).frame(width: 8, height: 8)
-            Text(text).font(FeralTheme.fontMonoCaption)
+            Text(text).font(.caption.monospaced())
         }
         .padding(.horizontal, 10).padding(.vertical, 5)
-        .background(FeralTheme.surface0, in: Capsule())
-        .overlay(Capsule().stroke(FeralTheme.hairline, lineWidth: 0.5))
+        .background(Color.white.opacity(0.05), in: Capsule())
     }
 
     private func badgeFor(_ status: ConnectionStore.Status) -> (Color, String) {
         switch status {
-        case .unpaired:                  return (FeralTheme.textTertiary, "no brain")
-        case .pairing:                   return (FeralTheme.stateWarn, "pairing…")
+        case .unpaired:                  return (.gray, "no brain")
+        case .pairing:                   return (.yellow, "pairing…")
         case .paired:                    return (.orange, "paired · offline")
-        case .connecting:                return (FeralTheme.stateWarn, "connecting…")
-        case .connected:                 return (FeralTheme.stateLive, "online")
-        case .reconnecting:             return (FeralTheme.stateWarn, "reconnecting…")
-        case .error:                     return (FeralTheme.stateError, "error")
+        case .connecting:                return (.yellow, "connecting…")
+        case .connected:                 return (.green, "online")
+        case .reconnecting:              return (.yellow, "reconnecting…")
+        case .error:                     return (.red, "error")
         }
     }
 }
 
 #Preview {
-    RootView(onboarding: OnboardingController())
+    RootView()
         .environmentObject(AppEnvironment.live())
 }

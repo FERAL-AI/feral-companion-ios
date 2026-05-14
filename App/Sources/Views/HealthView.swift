@@ -62,7 +62,7 @@ struct HealthView: View {
             }
             .padding(.vertical, 16)
         }
-        .background(FeralTheme.bgDeep.ignoresSafeArea())
+        .background(Color.black.ignoresSafeArea())
         .onReceive(stalenessTimer) { now in stalenessTick = now }
     }
 
@@ -131,11 +131,11 @@ private struct MetricCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(FeralTheme.padMD)
-        .feralGlass(.thin, radius: .md)
+        .padding()
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 16))
         .overlay(
-            RoundedRectangle(cornerRadius: FeralTheme.radiusMD, style: .continuous)
-                .stroke(accent.opacity(0.15), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(accent.opacity(0.15), lineWidth: 1)
         )
     }
 

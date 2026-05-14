@@ -4,26 +4,19 @@ import UIKit
 @main
 struct FeralCompanionApp: App {
     @StateObject private var environment = AppEnvironment.live()
-    @StateObject private var onboarding = OnboardingController()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
-            Group {
-                if onboarding.isComplete {
-                    RootView(onboarding: onboarding)
-                } else {
-                    OnboardingHost(controller: onboarding)
+            RootView()
+                .environmentObject(environment)
+                .preferredColorScheme(.dark)
+                .onOpenURL { url in
+                    environment.handleDeepLink(url)
                 }
-            }
-            .environmentObject(environment)
-            .preferredColorScheme(.dark)
-            .onOpenURL { url in
-                environment.handleDeepLink(url)
-            }
-            .onChange(of: scenePhase) { newPhase in
-                handleScenePhase(newPhase)
-            }
+                .onChange(of: scenePhase) { newPhase in
+                    handleScenePhase(newPhase)
+                }
         }
     }
 

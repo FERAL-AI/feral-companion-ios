@@ -66,8 +66,8 @@ struct ChatView: View {
                         }
                     }
                 }
-                .padding(FeralTheme.padMD)
-                .feralGlass(.thin, radius: .md)
+                .padding(12)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .padding(.horizontal)
                 .padding(.top, 8)
             }
@@ -126,18 +126,14 @@ struct ChatView: View {
                     .autocorrectionDisabled(false)
                     .textInputAutocapitalization(.sentences)
                     .padding(.horizontal, 12).padding(.vertical, 10)
-                    .background(FeralTheme.surface1, in: RoundedRectangle(cornerRadius: FeralTheme.radiusMD, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: FeralTheme.radiusMD, style: .continuous)
-                            .stroke(FeralTheme.hairline, lineWidth: 0.5)
-                    )
+                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
 
                 Button {
                     Task { await sendCurrent() }
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title2)
-                        .foregroundStyle(canSend ? FeralTheme.accent : FeralTheme.textTertiary)
+                        .foregroundStyle(canSend ? Color.green : Color.gray)
                 }
                 .disabled(!canSend)
 
@@ -169,14 +165,11 @@ struct ChatView: View {
                 } label: {
                     Image(systemName: env.brain.voiceActive ? "mic.fill" : "mic")
                         .font(.title2)
-                        .foregroundStyle(env.brain.voiceActive ? FeralTheme.stateError : (env.brain.state.isConnected ? FeralTheme.stateLive : FeralTheme.textTertiary))
+                        .foregroundStyle(env.brain.voiceActive ? .red : (env.brain.state.isConnected ? .green : .gray))
                 }
             }
-            .padding(FeralTheme.padLG)
+            .padding()
             .background(.ultraThinMaterial)
-            .overlay(alignment: .top) {
-                Rectangle().fill(FeralTheme.hairline).frame(height: 0.5)
-            }
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -287,7 +280,7 @@ struct ConversationsListView: View {
                                     Spacer()
                                     if meta.id == env.history.currentSessionId {
                                         Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(FeralTheme.stateLive)
+                                            .foregroundStyle(.green)
                                     }
                                 }
                                 HStack(spacing: 8) {
@@ -332,15 +325,11 @@ private struct ChatBubble: View {
             VStack(alignment: alignment, spacing: 2) {
                 Text(message.text)
                     .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .background(background, in: RoundedRectangle(cornerRadius: 18))
                     .foregroundStyle(foreground)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(borderColor, lineWidth: 0.5)
-                    )
                 Text(message.role.rawValue.capitalized)
                     .font(.caption2)
-                    .foregroundStyle(FeralTheme.textTertiary)
+                    .foregroundStyle(.tertiary)
             }
             if message.role != .user { Spacer(minLength: 32) }
         }
@@ -351,23 +340,16 @@ private struct ChatBubble: View {
     }
     private var background: Color {
         switch message.role {
-        case .user: return FeralTheme.accent.opacity(0.85)
-        case .assistant: return FeralTheme.surface1
-        case .system: return FeralTheme.stateWarnSoft
+        case .user: return Color.green.opacity(0.85)
+        case .assistant: return Color.white.opacity(0.08)
+        case .system: return Color.orange.opacity(0.15)
         }
     }
     private var foreground: Color {
         switch message.role {
-        case .user: return .white
-        case .assistant: return FeralTheme.textPrimary
-        case .system: return FeralTheme.stateWarn
-        }
-    }
-    private var borderColor: Color {
-        switch message.role {
-        case .user: return .clear
-        case .assistant: return FeralTheme.hairline
-        case .system: return FeralTheme.stateWarn.opacity(0.3)
+        case .user: return .black
+        case .assistant: return .white
+        case .system: return .orange
         }
     }
 }

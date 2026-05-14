@@ -3,7 +3,6 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var env: AppEnvironment
     @Binding var showPairingSheet: Bool
-    @ObservedObject var onboarding: OnboardingController
     @State private var showLog = false
     @State private var probing = false
     @State private var lastProbeResult: String? = nil
@@ -99,14 +98,6 @@ struct SettingsView: View {
                     .foregroundStyle(.tertiary)
             }
 
-            Section("Setup") {
-                Button {
-                    onboarding.reset()
-                } label: {
-                    Label("Re-run setup wizard", systemImage: "arrow.counterclockwise")
-                }
-            }
-
             Section("About") {
                 LabeledContent("Companion version", value: "0.4.0 (Phase 3 + 6)")
                 LabeledContent("HUP version", value: FeralNodeSDKInfo.hupVersion)
@@ -114,7 +105,7 @@ struct SettingsView: View {
             }
         }
         .scrollContentBackground(.hidden)
-        .background(FeralTheme.bgDeep.ignoresSafeArea())
+        .background(Color.black.ignoresSafeArea())
         .sheet(isPresented: $showLog) {
             DebugLogView()
         }
@@ -134,11 +125,11 @@ struct SettingsView: View {
 
     private var statusColor: Color {
         switch env.connection.status {
-        case .connected: return FeralTheme.stateLive
-        case .error: return FeralTheme.stateError
-        case .connecting, .reconnecting, .pairing: return FeralTheme.stateWarn
+        case .connected: return .green
+        case .error: return .red
+        case .connecting, .reconnecting, .pairing: return .yellow
         case .paired: return .orange
-        case .unpaired: return FeralTheme.textTertiary
+        case .unpaired: return .gray
         }
     }
 }
