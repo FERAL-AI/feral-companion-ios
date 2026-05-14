@@ -105,7 +105,7 @@ struct SettingsView: View {
             }
         }
         .scrollContentBackground(.hidden)
-        .background(Color.black.ignoresSafeArea())
+        .background(FeralTheme.bgDeep.ignoresSafeArea())
         .sheet(isPresented: $showLog) {
             DebugLogView()
         }
@@ -125,11 +125,11 @@ struct SettingsView: View {
 
     private var statusColor: Color {
         switch env.connection.status {
-        case .connected: return .green
-        case .error: return .red
-        case .connecting, .reconnecting, .pairing: return .yellow
+        case .connected: return FeralTheme.stateLive
+        case .error: return FeralTheme.stateError
+        case .connecting, .reconnecting, .pairing: return FeralTheme.stateWarn
         case .paired: return .orange
-        case .unpaired: return .gray
+        case .unpaired: return FeralTheme.textTertiary
         }
     }
 }
