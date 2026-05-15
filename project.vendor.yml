@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/yonaskolb/XcodeGen/master/Docs/spec.json
+#
+# project.vendor.yml — full-mode wrapper spec for FERAL Companion.
+#
+# Includes the base project.yml and layers the five proprietary
+# JieLi/Realtek frameworks onto the FeralCompanion + tests targets.
+# Used by `scripts/bootstrap.sh` when all five frameworks are present
+# under `Vendor/`. Direct invocation:
+#
+#   xcodegen generate --spec project.vendor.yml
+#
+# The base spec (`project.yml`) is the stub-mode source of truth and
+# remains a valid xcodegen spec on its own, so a fresh `git clone`
+# without the vendor drop still builds via `xcodegen generate`.
+#
+# The frameworks themselves are NDA-licensed (JieLi / Realtek
+# CocoaLumberjack is BSD-3 but bundled alongside for binary parity
+# with the vendor demo); they are NOT redistributable through this
+# public repository. See `docs/VENDOR_SETUP.md` for the access path.
+
+include:
+  - path: project.yml
+    relativePaths: true
+
+targets:
+  FeralCompanion:
+    dependencies:
+      # Vendor frameworks live in Vendor/ and are gitignored. Each
+      # one is embed=true so the .ipa carries them.
+      - framework: Vendor/JWBle.framework
+        embed: true
+        codeSign: true
+      - framework: Vendor/CocoaLumberjack.framework
+        embed: true
+        codeSign: true
+      - framework: Vendor/RTKAudioConnectSDK.framework
+        embed: true
+        codeSign: true
+      - framework: Vendor/RTKLEFoundation.framework
+        embed: true
+        codeSign: true
+      - framework: Vendor/RTKOTASDK.framework
+        embed: true
+        codeSign: true
+
+  FeralCompanionTests:
+    dependencies:
+      # `@testable import FeralCompanion` re-exposes types whose Swift
+      # signatures reference the vendor `import JWBle` statement
+      # (e.g. `JWBleSession.Phase`); without these listed here in
+      # vendor mode, compilation fails with "Unable to resolve module
+      # dependency: 'JWBle'". `embed: false` because the host app
+      # already embeds them — the test bundle loads against the host.
+      - framework: Vendor/JWBle.framework
+        embed: false
+        codeSign: false
+      - framework: Vendor/CocoaLumberjack.framework
+        embed: false
+        codeSign: false
