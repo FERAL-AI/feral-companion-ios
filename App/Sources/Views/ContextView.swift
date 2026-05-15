@@ -178,17 +178,28 @@ struct ContextView: View {
     }
 
     private var errorState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle")
+        // 401 is special: it means the brain is reachable but its
+        // HTTP middleware doesn't yet honor the `phone_bearer` we
+        // hold (it still only accepts `FERAL_API_KEY`). Surface a
+        // truth-in-status message so the operator knows to update
+        // the brain rather than blame the iOS app or the network.
+        let isUnauthorized: Bool
+        if case .unauthorized = contextStore.lastFailure { isUnauthorized = true }
+        else { isUnauthorized = false }
+
+        return VStack(spacing: 10) {
+            Image(systemName: isUnauthorized ? "lock.shield" : "exclamationmark.triangle")
                 .font(.system(size: 48, weight: .thin))
-                .foregroundStyle(FeralTheme.stateWarn)
-            Text("Context unavailable")
+                .foregroundStyle(isUnauthorized ? FeralTheme.accent : FeralTheme.stateWarn)
+            Text(isUnauthorized ? "Waiting for brain auth" : "Context unavailable")
                 .font(.headline)
                 .foregroundStyle(FeralTheme.textPrimary)
-            if let err = contextStore.lastError {
-                Text(err)
+            if let message = contextStore.lastFailure?.userMessage ?? contextStore.lastError {
+                Text(message)
                     .font(.caption)
                     .foregroundStyle(FeralTheme.textTertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
             }
         }
         .frame(maxWidth: .infinity)
