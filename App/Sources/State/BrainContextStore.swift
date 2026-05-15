@@ -14,6 +14,10 @@ public final class BrainContextStore: ObservableObject {
     @Published public private(set) var hardwareContext: String = ""
     @Published public private(set) var lastRefreshAt: Date? = nil
     @Published public private(set) var lastError: String? = nil
+    /// Structured most-recent failure mode, set alongside ``lastError``
+    /// so views can swap "Status 401" for an operator-friendly
+    /// explanation. Cleared on every successful refresh.
+    @Published public private(set) var lastFailure: BrainHTTPFailure? = nil
 
     private weak var brainClient: BrainClient?
     private var pollTask: Task<Void, Never>?
@@ -40,26 +44,18 @@ public final class BrainContextStore: ObservableObject {
     }
 
     public func refresh() async {
-        guard let httpBase = brainClient?.brainHTTPBase else {
+        guard let client = brainClient else {
             perceptionText = "Not connected."
             lastError = "Not connected to a brain."
+            lastFailure = .transport("Not connected to a brain.")
             return
         }
-        guard let url = URL(string: "/api/context/live", relativeTo: httpBase) else {
-            lastError = "Could not build URL"
-            return
-        }
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                lastError = "Status \((response as? HTTPURLResponse)?.statusCode ?? -1)"
-                return
-            }
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                lastError = "Invalid JSON"
-                return
-            }
-
+        let result = await client.authedJSONGET("/api/context/live")
+        switch result {
+        case .failure(let failure):
+            lastFailure = failure
+            lastError = failure.userMessage
+        case .success(let json):
             perceptionText = (json["perception_text"] as? String) ?? ""
             hardwareContext = (json["hardware_context"] as? String) ?? ""
 
@@ -95,8 +91,7 @@ public final class BrainContextStore: ObservableObject {
 
             lastRefreshAt = Date()
             lastError = nil
-        } catch {
-            lastError = error.localizedDescription
+            lastFailure = nil
         }
     }
 

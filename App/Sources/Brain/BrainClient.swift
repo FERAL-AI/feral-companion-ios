@@ -115,6 +115,18 @@ public final class BrainClient: ObservableObject {
     private var historyCancellables: Set<AnyCancellable> = []
     private var audioCapture: AudioCapture?
 
+    /// Bearer captured on the most recent ``connect(...)`` call so the
+    /// REST polling stores (`BrainContextStore`, `BrainCapabilitiesStore`,
+    /// onboarding probes) can attach `Authorization: Bearer <token>` to
+    /// every request without reaching back into ``ConnectionStore``.
+    /// The brain's HTTP layer treats this the same as the WebSocket
+    /// `phone_bearer` (see ``_verify_credential`` in
+    /// ``feral-core/api/server.py``) once the brain-side HTTP middleware
+    /// learns to honor non-`FERAL_API_KEY` bearers — until then iOS
+    /// is pre-shipping the header so REST polling lights up the moment
+    /// the brain change lands.
+    public private(set) var httpBearer: String? = nil
+
     public init(audioPlayback: AudioPlayback? = nil) {
         self.audioPlayback = audioPlayback ?? AudioPlayback()
     }
@@ -191,6 +203,7 @@ public final class BrainClient: ObservableObject {
         await disconnect()
 
         state = .connecting(brainURL: brainURL)
+        self.httpBearer = apiKey
 
         let node = FeralNode(brainURL: brainURL, apiKey: apiKey, nodeID: nodeId)
         for adapter in adapters {
@@ -615,17 +628,17 @@ public final class BrainClient: ObservableObject {
     /// Idempotent. Safe to call repeatedly; the `since_ms` cursor
     /// makes the second call a no-op when no new turns landed.
     public func reconcileTranscriptFromBrain() async {
-        let brainURL: URL
-        do { brainURL = try extractBrainURL() } catch { return }
-        // The brain URL is a WebSocket (`ws://` / `wss://`); rewrite
-        // the scheme + drop the WS path component to hit `/api/...`.
-        guard let httpBase = Self.httpBase(from: brainURL) else { return }
-        guard let endpoint = URL(string: "/api/sessions/primary/transcript?since_ms=\(lastSeenTranscriptTs)&limit=200", relativeTo: httpBase) else {
-            return
-        }
+        // Reuse the shared authed-request helper so the brain sees
+        // the same `Authorization: Bearer <phone_bearer>` header that
+        // gates `/api/context/live` and `/api/capabilities`. Without
+        // this header the brain returns 401 once the matching
+        // server-side middleware change lands.
+        guard let req = authedRequest(
+            path: "/api/sessions/primary/transcript?since_ms=\(lastSeenTranscriptTs)&limit=200"
+        ) else { return }
 
         do {
-            let (data, response) = try await URLSession.shared.data(from: endpoint)
+            let (data, response) = try await URLSession.shared.data(for: req)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
             guard let messages = json["messages"] as? [[String: Any]] else { return }

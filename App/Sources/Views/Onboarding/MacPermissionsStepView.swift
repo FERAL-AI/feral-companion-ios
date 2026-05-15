@@ -9,6 +9,7 @@ struct MacPermissionsStepView: View {
     @State private var permissions: [MacPermissionRow] = []
     @State private var isLoading = true
     @State private var pollTimer: Timer?
+    @State private var lastFailure: BrainHTTPFailure? = nil
 
     var body: some View {
         VStack(spacing: FeralTheme.padLG) {
@@ -33,9 +34,10 @@ struct MacPermissionsStepView: View {
                     .tint(FeralTheme.accent)
                     .frame(height: 100)
             } else if permissions.isEmpty {
-                Text("Could not reach the brain. Make sure it's running.")
+                Text(emptyStateMessage)
                     .font(.subheadline)
                     .foregroundStyle(FeralTheme.textTertiary)
+                    .multilineTextAlignment(.center)
                     .padding(.horizontal, FeralTheme.padXL)
             } else {
                 ScrollView {
@@ -111,43 +113,49 @@ struct MacPermissionsStepView: View {
 
     // MARK: - Networking
 
-    private func fetchPermissions() {
-        guard let base = env.brain.brainHTTPBase else {
-            isLoading = false
-            return
+    /// Operator-facing copy for the empty-permissions state. Bare
+    /// "Could not reach the brain" is wrong when the brain returned
+    /// 401 — that's not a reachability problem, it's an auth problem.
+    private var emptyStateMessage: String {
+        if case .unauthorized = lastFailure {
+            return BrainHTTPFailure.unauthorized.userMessage
         }
-        guard let url = URL(string: "/api/system/permissions", relativeTo: base) else { return }
+        return "Could not reach the brain. Make sure it's running."
+    }
 
+    private func fetchPermissions() {
+        let client = env.brain
         Task {
-            do {
-                let (data, response) = try await URLSession.shared.data(from: url)
-                guard let http = response as? HTTPURLResponse,
-                      http.statusCode == 200 else {
-                    isLoading = false
+            let result = await client.authedJSONGET("/api/system/permissions")
+            switch result {
+            case .failure(let failure):
+                await MainActor.run {
+                    self.isLoading = false
+                    self.lastFailure = failure
+                }
+            case .success(let json):
+                guard let rows = json["permissions"] as? [[String: Any]] else {
+                    await MainActor.run {
+                        self.isLoading = false
+                        self.lastFailure = .invalidJSON
+                    }
                     return
                 }
-                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let rows = json["permissions"] as? [[String: Any]] else {
-                    isLoading = false
-                    return
-                }
-
                 let parsed = rows.compactMap { MacPermissionRow(from: $0) }
                 await MainActor.run {
                     self.permissions = parsed
                     self.isLoading = false
+                    self.lastFailure = nil
                 }
-            } catch {
-                await MainActor.run { self.isLoading = false }
             }
         }
     }
 
     private func openOnMac(_ key: String) async {
-        guard let base = env.brain.brainHTTPBase else { return }
-        guard let url = URL(string: "/api/system/permissions/open", relativeTo: base) else { return }
-
-        var request = URLRequest(url: url)
+        // Reuse the bearer-attaching helper; flip to POST and add the
+        // JSON body. Without the Authorization header the brain
+        // returns 401 just like the GET path.
+        guard var request = env.brain.authedRequest(path: "/api/system/permissions/open") else { return }
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["permission_key": key])
