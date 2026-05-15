@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import CoreBluetooth
 import JWBle
 
 /// Singleton BLE lifecycle manager for the JieLi W300 glasses.
@@ -273,6 +274,47 @@ public final class JWBleSession: ObservableObject {
         // Already connected or connecting — skip
         if case .ready = phase { return }
         if case .connecting = phase { return }
+
+        // Phase reconciliation: scenePhase: .background drives our
+        // local `phase` to `.idle` (via `disconnect()` in the lifecycle
+        // hook), but the JWBle SDK keeps the CoreBluetooth pipe open
+        // across the app suspend/resume cycle. On `.active`, the SDK
+        // still reports `JWBleManager.isConnected == 1` and the
+        // CBPeripheral's `state == .connected`, so kicking off a fresh
+        // scan + reconnect was redundant — and it spammed the log with
+        // a string of `API MISUSE: <CBCentralManager> can only accept
+        // this command while in the powered on state` warnings (the
+        // SDK calls `connectPeripheral:` before its CB manager has
+        // re-asserted `.poweredOn`). Operator log 2026-05-14T23:27:55
+        // captured this storm. If the SDK already holds a connected
+        // peripheral matching our saved UUID, we just promote `phase`
+        // to `.ready` and emit a single status event, skipping the
+        // scan path entirely.
+        let mgr = JWBleManager.shareInstance()
+        // ObjC declarations on `JWBleManager` lack nullability
+        // annotations, so Swift sees `connectionModel`, `per`, and
+        // `deviceName` as implicitly-unwrapped optionals. Treat them
+        // defensively — on a cold launch where the SDK hasn't bound a
+        // peripheral yet, `per` can be nil even though the type says
+        // otherwise.
+        let model: JWBleDeviceModel? = mgr.connectionModel
+        let peripheral: CBPeripheral? = model?.per
+        if mgr.isConnected,
+           let peripheral = peripheral,
+           peripheral.identifier.uuidString == savedUUID,
+           peripheral.state == .connected {
+            let modelName: String? = model?.deviceName
+            let name = (modelName?.isEmpty == false ? modelName : nil)
+                ?? peripheral.name
+                ?? "W300"
+            DebugLog.shared.success("jwble: auto-reconnect — SDK already holds \(name) (\(savedUUID)); promoting to .ready without rescan")
+            phase = .ready(name: name)
+            emitGlassesStatus("ready", extra: [
+                "device_name": .string(name),
+                "promoted_from": .string("auto_reconnect_already_connected"),
+            ])
+            return
+        }
 
         DebugLog.shared.info("jwble: auto-reconnect scanning for saved UUID \(savedUUID)")
         discovered = []
