@@ -111,7 +111,35 @@ public final class ConnectionStore: ObservableObject {
 
     /// Apply a decoded pairing payload — runs check / verify-PIN /
     /// complete and stores the resulting `phone_bearer`.
+    ///
+    /// **Idempotency**: if we are already paired with the same brain URL
+    /// and hold a non-empty bearer, this call short-circuits. Without
+    /// this guard, two paths can re-mint a fresh `device_id` server-side
+    /// for the same physical phone:
+    ///   1. The QR scanner re-fires the deep link if the operator taps
+    ///      back into the wizard (every QR re-decode hits onOpenURL).
+    ///   2. ``onOpenURL`` can fire twice in quick succession when iOS
+    ///      forwards the universal link AND the QR-scanner result.
+    /// Operator log 2026-05-14 captured this storm: two `pair: starting`
+    /// events 4s apart with two distinct server `device_id`s
+    /// (95b84206 → 26252ddd). The second device orphans the first
+    /// node identity, breaks transcript continuity, and confuses
+    /// brain-side device pairing telemetry. If the operator genuinely
+    /// wants to re-pair (e.g. moving to a new brain host), they unpair
+    /// first via Settings, which clears `phoneBearer` and lets this
+    /// guard fall through.
     public func applyPairing(_ decoded: PairingClient.Decoded, pin: String? = nil) async {
+        if decoded.brainURL == self.brainURL,
+           let existing = self.phoneBearer,
+           !existing.isEmpty,
+           pin == nil {
+            DebugLog.shared.info("pair: already paired with \(decoded.brainURL.absoluteString) (bearer length=\(existing.count)) — skipping re-pair")
+            // Make sure status reflects the cached pairing so the
+            // wizard advances rather than getting stuck on
+            // .pairing(message:) from a previous slice.
+            self.status = .paired(brainURL: decoded.brainURL, nodeId: self.nodeId)
+            return
+        }
         DebugLog.shared.info("pair: starting at \(decoded.brainURL.absoluteString)")
         status = .pairing(message: "Checking pair URL…")
         do {

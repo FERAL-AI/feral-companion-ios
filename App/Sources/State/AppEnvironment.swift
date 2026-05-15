@@ -114,8 +114,25 @@ public final class AppEnvironment: ObservableObject {
 
     // MARK: - Deep links
 
+    /// Last-handled deep link URL + timestamp, used to dedupe the
+    /// rapid double-fire iOS occasionally produces when a QR scan
+    /// result and a universal-link callback both resolve to the same
+    /// `feral://pair?p=...`. The 2-second window is wider than any
+    /// realistic single user retry but tighter than an intentional
+    /// re-pair attempt.
+    private var lastDeepLink: (url: String, at: Date)?
+    private static let deepLinkDebounceSeconds: TimeInterval = 2.0
+
     /// Called from `App.onOpenURL` for `feral://pair?p=...` links.
     public func handleDeepLink(_ url: URL) {
+        let key = url.absoluteString
+        if let last = lastDeepLink,
+           last.url == key,
+           Date().timeIntervalSince(last.at) < Self.deepLinkDebounceSeconds {
+            DebugLog.shared.info("env: deep link \(key) ignored — duplicate within \(Self.deepLinkDebounceSeconds)s")
+            return
+        }
+        lastDeepLink = (url: key, at: Date())
         Task { @MainActor in
             guard let decoded = PairingClient.decode(url.absoluteString) else { return }
             await connection.applyPairing(decoded)
