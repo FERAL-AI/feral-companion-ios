@@ -1,12 +1,27 @@
 # FMDB (vendored — public-domain headers + additions)
 
-This directory vendors the four FMDB source files that the JieLi
+This directory vendors the FMDB source files that the JieLi
 `JWBle.framework` link target depends on at runtime:
 
 - `FMDB.h` — umbrella header
-- `FMDatabase.h` — class declaration (header-only here; the .o is shipped inside `JWBle.framework`)
+- `FMDatabase.h` — class declaration (header-only here; the `.o` is
+  shipped inside `JWBle.framework`)
+- `FMResultSet.h` — class declaration (header-only here; the `.o` is
+  shipped inside `JWBle.framework`). Transitively `#import`ed by
+  `FMDatabase.h`, so the compile fails without it (`'FMResultSet.h'
+  file not found`).
+- `FMDatabasePool.h` — class declaration (header-only here; the `.o`
+  is shipped inside `JWBle.framework`). Transitively `#import`ed by
+  `FMDatabase.h`.
 - `FMDatabaseAdditions.h` — category interface
 - `FMDatabaseAdditions.m` — category implementation
+
+Only the `.m` for `FMDatabaseAdditions` ships here. The other class
+implementations (`FMDatabase.m`, `FMResultSet.m`, `FMDatabasePool.m`)
+must NOT be vendored alongside — they would duplicate-symbol against
+the `.o` files baked into `JWBle.framework` and the linker errors with
+*ld: duplicate symbol _OBJC_CLASS_$_FMDatabase*. Headers are fine
+because they only declare; implementations come from the framework.
 
 `JWBle.framework` bundles its own `FMDatabase.o` and `FMResultSet.o` but
 **not** the `(FMDatabaseAdditions)` category. The vendor demo registers
