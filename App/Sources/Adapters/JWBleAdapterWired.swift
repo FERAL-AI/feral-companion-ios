@@ -1,3 +1,8 @@
+// Companion-onboarding fix (2026-05-15): gate the real JieLi adapter
+// behind `canImport(JWBle)`. When absent, the stubs in
+// `JWBleStubs.swift` provide a `VendorAdapter`-conformant no-op.
+#if canImport(JWBle)
+
 import Foundation
 import Combine
 import JWBle
@@ -446,3 +451,5 @@ public final class JWBleAdapterWired: VendorAdapter {
 
     private var pollTickCount: UInt = 0
 }
+
+#endif // canImport(JWBle)

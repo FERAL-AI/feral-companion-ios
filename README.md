@@ -43,17 +43,85 @@ The brain is device-agnostic. Adapters are device-specific. The app shell is bot
 
 ## Build
 
+A fresh clone builds in **stub mode** — no NDA frameworks, no signing
+team, just the simulator-runnable Demo 2 surface (chat, Context tab,
+Settings, Devices summary, onboarding wizard, HealthKit + microphone).
+
 ```bash
-brew install xcodegen
-xcodegen generate
+git clone https://github.com/FERAL-AI/feral-companion-ios.git
+cd feral-companion-ios
+./scripts/bootstrap.sh
 open FeralCompanion.xcodeproj
 ```
 
-To build for a real iPhone you need an Apple Developer team configured in Xcode signing.
+`./scripts/bootstrap.sh` is idempotent: it installs `xcodegen` via
+Homebrew if needed, detects whether the JieLi/Realtek frameworks are
+present in `Vendor/` (or in `~/.feral/vendor-cache/companion-ios/`),
+selects the appropriate build mode, and regenerates the Xcode
+project.
+
+### Build modes
+
+| Mode | Vendor drop required | Hardware | What works |
+|---|---|---|---|
+| **Stub** (default) | No | iPhone simulator | Demo 2 — chat, Context tab, Settings, Devices summary, onboarding, HealthKit, microphone, QR pair |
+| **Full** | Yes (NDA) | iPhone + JieLi W300 | Demo 3 — everything in stub mode + W300 BLE glasses + Theora wristband |
+
+Stub mode satisfies the call-site signatures with no-op
+implementations in [`App/Sources/Adapters/JWBleStubs.swift`](App/Sources/Adapters/JWBleStubs.swift)
+gated behind `#if !canImport(JWBle)`. The real wired adapters in
+[`App/Sources/Adapters/JWBleAdapterWired.swift`](App/Sources/Adapters/JWBleAdapterWired.swift),
+[`App/Sources/Adapters/JWBleSession.swift`](App/Sources/Adapters/JWBleSession.swift),
+[`App/Sources/Adapters/W300SensorManager.swift`](App/Sources/Adapters/W300SensorManager.swift),
+and [`App/Sources/Views/BLEScanView.swift`](App/Sources/Views/BLEScanView.swift)
+gate themselves behind `#if canImport(JWBle)` so the two
+implementations never collide.
+
+### Full-mode access
+
+See [`docs/VENDOR_SETUP.md`](docs/VENDOR_SETUP.md) for the JieLi NDA
+flow, vendor cache layout, and update procedure.
+
+### Code signing
+
+`project.yml` reads `DEVELOPMENT_TEAM` from the environment, so every
+contributor signs with their own Apple Developer team without
+editing the spec:
+
+```bash
+export DEVELOPMENT_TEAM=ABCDE12345     # optional — your team ID
+./scripts/bootstrap.sh
+```
+
+If you leave it unset, Xcode's "Signing & Capabilities" tab will
+prompt for a team on first build.
+
+### Manual flow (no bootstrap)
+
+```bash
+brew install xcodegen
+
+# Stub mode — no vendor frameworks required:
+xcodegen generate
+
+# Full mode — requires all five Vendor/*.framework present:
+xcodegen generate --spec project.vendor.yml
+
+open FeralCompanion.xcodeproj
+```
 
 ## SDK sync
 
 This repo vendors `Sources/FeralNodeSDK/` from `ASOS/feral-nodes/ios-node-sdk/`. See `docs/SDK_SYNC.md` for the sync protocol (the SDK remains canonical in ASOS until extracted).
+
+## Third-party sources
+
+[`Sources/ThirdParty/FMDB/`](Sources/ThirdParty/FMDB/) holds the
+public-domain FMDB headers + the `FMDatabaseAdditions` category that
+the JieLi vendor demo requires. The category is wrapped in
+`#if __has_include(<JWBle/JWBle.h>)` so the file compiles to empty in
+stub mode and links against the FMDatabase symbol shipped inside
+`JWBle.framework` when the vendor drop is present.
 
 ## Demos this app supports
 

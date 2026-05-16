@@ -1,3 +1,11 @@
+// Companion-onboarding fix (2026-05-15): the real `BLEScanView` is
+// only compiled when the proprietary `JWBle.framework` is present.
+// In stub mode the matching `BLEScanView` in `JWBleStubs.swift`
+// takes its place with the same call-site signature so callers in
+// `DevicesView.swift` and `PeripheralsStepView.swift` keep building
+// across both modes.
+#if canImport(JWBle)
+
 import SwiftUI
 import JWBle
 
@@ -155,3 +163,5 @@ struct BLEScanView: View {
         return .orange
     }
 }
+
+#endif

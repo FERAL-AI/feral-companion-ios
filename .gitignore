@@ -35,12 +35,22 @@ Icon
 .env
 .env.local
 
-## Vendor frameworks (large; require local drop, not committed) ##
+## Vendor frameworks (proprietary JieLi/RTK stacks — see Vendor/README.md) ##
+## Public-domain FMDB sources have moved to Sources/ThirdParty/FMDB/ and ##
+## are tracked; only the NDA-licensed binary frameworks stay ignored.   ##
 Vendor/JWBle.framework/
 Vendor/RTKAudioConnectSDK.framework/
 Vendor/RTKLEFoundation.framework/
 Vendor/RTKOTASDK.framework/
 Vendor/CocoaLumberjack.framework/
+
+## Local-only vendor cache populated by scripts/bootstrap.sh ##
+Vendor/.cache/
+
+## Pre-2026.5.28 layout: FMDB lived under Vendor/FMDB/. The four files ##
+## that the build needs now live in Sources/ThirdParty/FMDB/. Any      ##
+## leftover Vendor/FMDB/ from an older checkout is harmless and stays  ##
+## untracked so it doesn't confuse `git status` output.                ##
 Vendor/FMDB/
 
 ## fastlane ##

@@ -1,0 +1,83 @@
+name: Companion CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Public-repo build pipeline. The proprietary JieLi / Realtek frameworks
+# are NOT available in CI by design (NDA — see docs/VENDOR_SETUP.md), so
+# every pipeline run exercises the stub-mode build path that contributors
+# get on a fresh `git clone`. This is the same invariant the README
+# promises: clone, run bootstrap.sh, get a runnable simulator build.
+#
+# The full-mode build (with vendor frameworks) is exercised internally on
+# a self-hosted runner that has access to the secured asset bucket. That
+# pipeline is not part of this public workflow.
+
+jobs:
+  bootstrap-dry-run:
+    name: bootstrap.sh --dry-run --force-stub
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install xcodegen
+        run: brew install xcodegen
+      - name: bootstrap.sh --dry-run --force-stub
+        run: ./scripts/bootstrap.sh --dry-run --force-stub
+      - name: Confirm build-mode invariant
+        run: |
+          output="$(./scripts/bootstrap.sh --dry-run --force-stub 2>&1)"
+          echo "$output"
+          echo "$output" | grep -q "build mode: stub" || {
+            echo "::error::expected stub mode, got: $output"
+            exit 1
+          }
+
+  stub-build:
+    name: xcodebuild stub mode (simulator)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Pin Xcode 16
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.app || true
+          xcodebuild -version
+
+      - name: bootstrap.sh (stub mode, no vendor cache)
+        env:
+          # No DEVELOPMENT_TEAM in CI — Xcode's automatic signing is
+          # disabled below via CODE_SIGNING_ALLOWED=NO so the team ID
+          # is irrelevant for the smoke build.
+          FERAL_VENDOR_CACHE: /nonexistent
+        run: ./scripts/bootstrap.sh --force-stub
+
+      - name: Confirm stub-mode pbxproj invariants
+        run: |
+          # No JieLi/RTK framework dependencies should appear in stub mode.
+          if grep -q "JWBle.framework\|RTKLEFoundation\|RTKOTASDK\|RTKAudioConnectSDK" FeralCompanion.xcodeproj/project.pbxproj; then
+            echo "::error::stub-mode pbxproj contains vendor framework refs"
+            exit 1
+          fi
+          # FMDB additions must be in the tree (compiled to empty TU
+          # in stub mode via __has_include guard).
+          grep -q "Sources/ThirdParty/FMDB" FeralCompanion.xcodeproj/project.pbxproj || {
+            echo "::error::missing Sources/ThirdParty/FMDB in pbxproj"
+            exit 1
+          }
+
+      - name: xcodebuild Debug -destination 'generic/platform=iOS Simulator'
+        run: |
+          xcodebuild \
+            -project FeralCompanion.xcodeproj \
+            -scheme FeralCompanion \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            build | tail -200

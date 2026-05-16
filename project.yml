@@ -1,11 +1,26 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/yonaskolb/XcodeGen/master/Docs/spec.json
 #
 # xcodegen spec for FERAL Companion. Regenerate the Xcode project with:
-#   xcodegen generate
+#   ./scripts/bootstrap.sh                            # recommended — auto-detects Vendor/
+#   xcodegen generate                                 # stub mode (no vendor frameworks)
+#   xcodegen generate --spec project.vendor.yml       # full mode (requires Vendor/*.framework)
 #
-# This file is the source of truth for the Xcode target. The generated
-# .xcodeproj is gitignored; CI and operators always regenerate from this
-# spec to avoid pbxproj merge conflicts.
+# This file is the source of truth for the **stub-mode** Xcode target.
+# The generated .xcodeproj is gitignored; CI and operators always
+# regenerate from this spec to avoid pbxproj merge conflicts.
+#
+# Two build modes:
+#   * STUB MODE (default for a fresh `git clone`): the proprietary
+#     JieLi/RTK frameworks are absent from Vendor/. The app builds
+#     against `App/Sources/Adapters/JWBleStubs.swift`, which provides
+#     no-op `JWBleSession` / `JWBleAdapterWired` / `BLEScanView` stubs.
+#     All non-glasses surfaces (chat, Context tab, Settings, Devices
+#     summary, onboarding wizard, HealthKit + microphone adapters)
+#     work end-to-end. Demo 2 is fully runnable.
+#   * FULL MODE: `project.vendor.yml` includes this spec and adds the
+#     five vendor frameworks plus the FMDB additions compile.
+#     Required for the W300 BLE glasses (Demo 3). The five frameworks
+#     must be present in Vendor/ before invoking the full-mode spec.
 
 name: FeralCompanion
 options:
@@ -38,40 +53,13 @@ targets:
     sources:
       - path: App/Sources
       - path: Sources/FeralNodeSDK
-      # JWBle.framework bundles its own FMDatabase.o + FMResultSet.o
-      # but NOT the (FMDatabaseAdditions) category. Compile JUST the
-      # additions .m so its category methods (getTableSchema:, etc.)
-      # register with the runtime FMDatabase class shipped inside
-      # JWBle.framework. Do NOT add the rest of Vendor/FMDB to
-      # sources — that would duplicate-symbol against JWBle.
-      # Without this fix JieLi's JWBleDBModel.createTable crashes
-      # the app at SDK init with:
-      #   *** -[FMDatabase getTableSchema:]: unrecognized selector
-      - path: Vendor/FMDB/FMDatabaseAdditions.m
-      - path: Vendor/FMDB/FMDatabaseAdditions.h
-    resources:
-      - path: App/Assets.xcassets
-      - path: App/LaunchScreen.storyboard
-    dependencies:
-      # Vendor frameworks live in Vendor/ and are gitignored. The
-      # operator drops the .framework bundles into Vendor/ once;
-      # CI re-fetches them from the secured asset bucket. Each one
-      # is embed=true so the .ipa carries them.
-      - framework: Vendor/JWBle.framework
-        embed: true
-        codeSign: true
-      - framework: Vendor/CocoaLumberjack.framework
-        embed: true
-        codeSign: true
-      - framework: Vendor/RTKAudioConnectSDK.framework
-        embed: true
-        codeSign: true
-      - framework: Vendor/RTKLEFoundation.framework
-        embed: true
-        codeSign: true
-      - framework: Vendor/RTKOTASDK.framework
-        embed: true
-        codeSign: true
+      # Public-domain FMDB sources are vendored under
+      # Sources/ThirdParty/FMDB/ (MIT-licensed; see README.md there).
+      # `FMDatabaseAdditions.m` is wrapped in
+      # `#if __has_include(<JWBle/JWBle.h>)` so the file is empty in
+      # stub mode and references the runtime FMDatabase class shipped
+      # inside JWBle.framework when the vendor drop is present.
+      - path: Sources/ThirdParty/FMDB
     info:
       path: App/Info.plist
       properties:
@@ -130,10 +118,16 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.feral.companion
         TARGETED_DEVICE_FAMILY: "1,2"
-        # Code signing — automatic with the operator's personal team.
-        # Override here if a different team should sign release builds.
+        # Code signing — automatic with the local Xcode signing team.
+        # The DEVELOPMENT_TEAM is environment-driven so every
+        # contributor signs with their own Apple Developer team
+        # without having to edit project.yml. Set DEVELOPMENT_TEAM in
+        # your shell rc (`export DEVELOPMENT_TEAM=ABCDE12345`) before
+        # running `./scripts/bootstrap.sh` / `xcodegen generate`, or
+        # leave it unset and configure signing manually in Xcode
+        # under "Signing & Capabilities".
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: V59NQ286UZ
+        DEVELOPMENT_TEAM: "${DEVELOPMENT_TEAM}"
         # HealthKit + Bluetooth + Background Modes capability flags.
         # Capabilities themselves are added via the entitlements file.
         CODE_SIGN_ENTITLEMENTS: App/FeralCompanion.entitlements
@@ -146,19 +140,11 @@ targets:
       - Tests/FeralCompanionTests
     dependencies:
       - target: FeralCompanion
-      # Vendor frameworks are needed for module resolution on the test
-      # bundle. `@testable import FeralCompanion` re-exposes types
-      # whose Swift signatures reference the vendor `import JWBle`
-      # statement (e.g. `JWBleSession.Phase`); without these listed
-      # here, compilation fails with "Unable to resolve module
-      # dependency: 'JWBle'". `embed: false` because the host app
-      # already embeds them — the test bundle loads against the host.
-      - framework: Vendor/JWBle.framework
-        embed: false
-        codeSign: false
-      - framework: Vendor/CocoaLumberjack.framework
-        embed: false
-        codeSign: false
+      # Vendor framework dependencies for the test bundle live in
+      # project.vendor.yml and only attach when FERAL_HAS_VENDOR=true.
+      # Stub-mode tests `@testable import FeralCompanion` against the
+      # JWBleStubs.swift types, so no JWBle module resolution is
+      # required.
     settings:
       base:
         BUNDLE_LOADER: $(TEST_HOST)
