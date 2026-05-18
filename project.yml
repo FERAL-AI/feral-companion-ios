@@ -64,8 +64,8 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: FERAL
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: "0.1.1"
+        CFBundleVersion: "2"
         UILaunchStoryboardName: LaunchScreen
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -113,7 +113,20 @@ targets:
         # and lives on the same Wi‑Fi as the phone. Without this
         # purpose string, iOS will deny the connection with a system
         # alert even when ATS allows it.
-        NSLocalNetworkUsageDescription: "FERAL connects to your local FERAL brain on this Wi-Fi network."
+        NSLocalNetworkUsageDescription: "FERAL needs Local Network access to discover and talk to your FERAL brain on this Wi-Fi. Without it, pairing cannot complete."
+        # iOS 17+ enforcement: any NWBrowser started without a matching
+        # NSBonjourServices entry is rejected with NoAuth(-65555) and the
+        # Local Network permission prompt never fires reliably. List every
+        # Bonjour service the app browses or publishes so iOS authorises
+        # the discovery path and prompts the user up-front.
+        NSBonjourServices:
+          - _feral._tcp
+          - _feral-phone._tcp
+          # _feral-probe._tcp is the throwaway service type used by
+          # LocalNetworkAuthorization.swift to trigger and detect the
+          # iOS Local Network prompt up-front (NWBrowser fails with
+          # NoAuth(-65555) if the type isn't declared here).
+          - _feral-probe._tcp
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.feral.companion

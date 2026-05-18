@@ -171,7 +171,13 @@ public final class ConnectionStore: ObservableObject {
                 }
             }
         } catch {
-            DebugLog.shared.error("probe: \(error.localizedDescription)")
+            let mapped = PairingClient.mapLocalNetworkError(error, brainURL: url)
+            if let brain = mapped as? BrainClientError,
+               case .localNetworkDenied = brain {
+                DebugLog.shared.error("probe: \(brain.errorDescription ?? "\(brain)")")
+            } else {
+                DebugLog.shared.error("probe: \(error.localizedDescription)")
+            }
         }
         return false
     }

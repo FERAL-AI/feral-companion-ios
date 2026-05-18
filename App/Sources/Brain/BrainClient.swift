@@ -691,6 +691,13 @@ public struct BrainMessage: Identifiable, Equatable {
 public enum BrainClientError: Error, LocalizedError {
     case notConnected
     case invalidBrainURL(String)
+    /// iOS denied the app's Local Network permission. Triggered when a
+    /// pair-flow URLSession request to an RFC-1918 host returns
+    /// `URLError.notConnectedToInternet | .networkConnectionLost |
+    /// .cannotConnectToHost` — none of which actually mean "offline".
+    /// Surfaced verbatim so callers (pair view) can render an "Open
+    /// Settings" button.
+    case localNetworkDenied(host: String)
 
     public var errorDescription: String? {
         switch self {
@@ -698,6 +705,8 @@ public enum BrainClientError: Error, LocalizedError {
             return "Brain client is not connected."
         case .invalidBrainURL(let s):
             return "Invalid brain URL: \(s)"
+        case .localNetworkDenied(let host):
+            return "FERAL needs Local Network permission to reach the brain at \(host). Open Settings -> Privacy & Security -> Local Network -> enable FERAL, then try again."
         }
     }
 }

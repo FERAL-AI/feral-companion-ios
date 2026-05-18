@@ -62,7 +62,17 @@ final class BrainPairFlow: ObservableObject {
             ])
             request.timeoutInterval = 10
 
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await URLSession.shared.data(for: request)
+            } catch {
+                // iOS reports Local Network denials as URLError(-1009)
+                // "Internet connection appears to be offline" even when
+                // the LAN is healthy. Map to a precise error before the
+                // string reaches the user.
+                throw PairingClient.mapLocalNetworkError(error, brainURL: brainURL)
+            }
             guard let http = response as? HTTPURLResponse,
                   (200..<300).contains(http.statusCode) else {
                 let code = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -85,6 +95,8 @@ final class BrainPairFlow: ObservableObject {
             )
             await env.connection.applyPairing(decoded)
             await finishPairing()
+        } catch let brain as BrainClientError {
+            self.error = brain.errorDescription ?? "\(brain)"
         } catch {
             self.error = "Connection failed: \(error.localizedDescription)"
         }
