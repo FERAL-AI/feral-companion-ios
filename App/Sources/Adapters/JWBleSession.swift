@@ -1,3 +1,9 @@
+// Companion-onboarding fix (2026-05-15): gate the real JieLi BLE
+// implementation behind `canImport(JWBle)`. When the proprietary
+// framework is absent (fresh `git clone` without vendor drop), the
+// stubs in `JWBleStubs.swift` take over. See `Vendor/README.md`.
+#if canImport(JWBle)
+
 import Foundation
 import SwiftUI
 import JWBle
@@ -318,3 +324,5 @@ public final class JWBleSession: ObservableObject {
         DebugLog.shared.info("jwble: disconnect called")
     }
 }
+
+#endif // canImport(JWBle)

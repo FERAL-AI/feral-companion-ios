@@ -5,6 +5,7 @@ import SwiftUI
 struct BrainDiscoverStepView: View {
     @ObservedObject var controller: OnboardingController
     @EnvironmentObject var env: AppEnvironment
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var discovery = BrainDiscovery()
     @State private var pairFlow: BrainPairFlow?
     @State private var showManualEntry = false
@@ -16,7 +17,13 @@ struct BrainDiscoverStepView: View {
         VStack(spacing: FeralTheme.padLG) {
             headerSection
 
-            if discovery.isScanning && discovery.discovered.isEmpty {
+            if discovery.authorization == .denied {
+                localNetworkDeniedBanner
+            } else if discovery.authorization == .undetermined && discovery.isScanning {
+                permissionPendingHint
+            }
+
+            if discovery.authorization == .granted && discovery.isScanning && discovery.discovered.isEmpty {
                 scanningIndicator
             }
 
@@ -31,7 +38,7 @@ struct BrainDiscoverStepView: View {
             alternativeMethodsSection
 
             if let error = pairFlow?.error {
-                Text(error)
+                Text(prettifyPairError(error))
                     .font(.caption)
                     .foregroundStyle(FeralTheme.stateError)
                     .padding(.horizontal, FeralTheme.padXL)
@@ -56,6 +63,14 @@ struct BrainDiscoverStepView: View {
         }
         .onDisappear {
             discovery.stopScan()
+        }
+        .onChange(of: scenePhase) { phase in
+            // User likely toggled Settings -> Privacy & Security -> Local
+            // Network. Re-probe so the banner clears (or stays) without
+            // forcing a back-out + retry of the onboarding step.
+            if phase == .active {
+                discovery.refreshAuthorization()
+            }
         }
         .onChange(of: pairFlow?.succeeded) { success in
             if success == true {
@@ -103,6 +118,50 @@ struct BrainDiscoverStepView: View {
                 .foregroundStyle(FeralTheme.textTertiary)
         }
         .frame(height: 120)
+    }
+
+    /// Surfaced when iOS has denied Local Network access. Without this,
+    /// the pair flow blows up with `-1009 "Internet connection appears
+    /// to be offline"`, which is a lie — Wi-Fi is fine, the permission
+    /// gate is what blocked the request.
+    private var localNetworkDeniedBanner: some View {
+        VStack(alignment: .leading, spacing: FeralTheme.padSM) {
+            HStack(spacing: FeralTheme.padSM) {
+                Image(systemName: "wifi.exclamationmark")
+                    .font(.title3)
+                    .foregroundStyle(FeralTheme.stateError)
+                Text("FERAL doesn't have Local Network permission")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(FeralTheme.textPrimary)
+            }
+            Text("iOS is blocking FERAL from reaching the brain on your Wi-Fi. Open Settings, enable Local Network for FERAL, then return here.")
+                .font(.caption)
+                .foregroundStyle(FeralTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                openLocalNetworkSettings()
+            } label: {
+                Label("Open Settings", systemImage: "gear")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, FeralTheme.padSM)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(FeralTheme.accent)
+        }
+        .padding(FeralTheme.padMD)
+        .feralGlass()
+        .padding(.horizontal, FeralTheme.padXL)
+    }
+
+    private var permissionPendingHint: some View {
+        HStack(spacing: FeralTheme.padSM) {
+            ProgressView()
+                .tint(FeralTheme.accent)
+            Text("Requesting Local Network permission…")
+                .font(.caption)
+                .foregroundStyle(FeralTheme.textTertiary)
+        }
+        .padding(.horizontal, FeralTheme.padXL)
     }
 
     private var discoveredBrainsList: some View {
@@ -204,5 +263,32 @@ struct BrainDiscoverStepView: View {
         Task {
             await flow.pairWithDiscovered(host: host, port: port)
         }
+    }
+
+    private func openLocalNetworkSettings() {
+        // UIApplication.openSettingsURLString deep-links into our app's
+        // own Settings page, which on iOS 16+ shows the Local Network
+        // toggle inline. iOS does not expose a public URL for the
+        // global Privacy -> Local Network list; this is the closest.
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
+    }
+
+    /// Replace the misleading iOS-default "The Internet connection
+    /// appears to be offline" copy with a precise message when the real
+    /// cause is the Local Network permission gate. The pair HTTP client
+    /// already detects this and surfaces a clear string, but third-party
+    /// URL errors that pre-date the gate detection still propagate the
+    /// raw `URLError.notConnectedToInternet` description.
+    private func prettifyPairError(_ raw: String) -> String {
+        let needles = [
+            "Internet connection appears to be offline",
+            "The network connection was lost",
+            "Could not connect to the server",
+        ]
+        if needles.contains(where: { raw.localizedCaseInsensitiveContains($0) }) {
+            return "Couldn't reach the brain on your Wi-Fi. If you just installed FERAL, allow Local Network access when iOS asks. Otherwise open Settings -> Privacy & Security -> Local Network and enable FERAL."
+        }
+        return raw
     }
 }

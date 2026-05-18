@@ -18,6 +18,14 @@
 //    * Heart rate: never stop the test manually; SDK crashes. Let
 //      it auto-time-out instead.
 //    * SpO2: never call `jwTestOxygen(.end)`; SDK crashes.
+//
+// Companion-onboarding fix (2026-05-15): the entire compilation unit
+// is gated behind `canImport(JWBle)`. When the proprietary framework
+// is absent (fresh `git clone` without vendor drop), this file is
+// empty and the JieLi-specific sensor code is not compiled. The
+// `VendorAdapter` surface is still satisfied by the no-op stub in
+// `JWBleStubs.swift`.
+#if canImport(JWBle)
 
 import Foundation
 import JWBle
@@ -357,3 +365,5 @@ struct StepsReading {
         }
     }
 }
+
+#endif

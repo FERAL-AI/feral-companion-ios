@@ -54,6 +54,73 @@ final class FeralCompanionTests: XCTestCase {
                        "wss://brain.feral.local/v1/node")
     }
 
+    // MARK: - Local Network permission gate
+
+    /// Pins the RFC-1918 / .local / link-local classifier driving the
+    /// "Open Settings" banner. Any miss here would resurrect the
+    /// misleading "Internet connection appears to be offline" string
+    /// for users whose brain is on a private LAN.
+    func test_isRFC1918OrLocal_classifies_private_addresses() {
+        XCTAssertTrue(PairingClient.isRFC1918OrLocal("192.168.18.10"))
+        XCTAssertTrue(PairingClient.isRFC1918OrLocal("10.0.0.5"))
+        XCTAssertTrue(PairingClient.isRFC1918OrLocal("172.20.5.1"))
+        XCTAssertTrue(PairingClient.isRFC1918OrLocal("169.254.5.1"))
+        XCTAssertTrue(PairingClient.isRFC1918OrLocal("127.0.0.1"))
+        XCTAssertTrue(PairingClient.isRFC1918OrLocal("FeralBrain.local"))
+        XCTAssertTrue(PairingClient.isRFC1918OrLocal("localhost"))
+        XCTAssertTrue(PairingClient.isRFC1918OrLocal("fe80::1"))
+
+        XCTAssertFalse(PairingClient.isRFC1918OrLocal("8.8.8.8"))
+        XCTAssertFalse(PairingClient.isRFC1918OrLocal("172.32.5.1"))
+        XCTAssertFalse(PairingClient.isRFC1918OrLocal("api.feral.ai"))
+        XCTAssertFalse(PairingClient.isRFC1918OrLocal("203.0.113.7"))
+    }
+
+    /// URLError(-1009) "Internet connection appears to be offline" must
+    /// map to .localNetworkDenied when the target is on the LAN. Public
+    /// hosts pass through untouched so we don't lie about a real outage.
+    func test_mapLocalNetworkError_converts_offline_url_error_for_private_hosts() {
+        let brain = URL(string: "http://192.168.18.10:9090")!
+        let offline = URLError(.notConnectedToInternet)
+        let mapped = PairingClient.mapLocalNetworkError(offline, brainURL: brain)
+        guard let brainErr = mapped as? BrainClientError,
+              case .localNetworkDenied(let host) = brainErr else {
+            return XCTFail("expected .localNetworkDenied, got \(mapped)")
+        }
+        XCTAssertEqual(host, "192.168.18.10")
+        XCTAssertTrue(
+            brainErr.errorDescription?.contains("Local Network") ?? false,
+            "errorDescription should mention Local Network; got \(brainErr.errorDescription ?? "nil")"
+        )
+    }
+
+    func test_mapLocalNetworkError_passes_through_public_hosts() {
+        let public_ = URL(string: "https://api.feral.ai/pair")!
+        let offline = URLError(.notConnectedToInternet)
+        let mapped = PairingClient.mapLocalNetworkError(offline, brainURL: public_)
+        // For real internet outages, surface the underlying URLError
+        // verbatim instead of pretending it's a permission issue.
+        XCTAssertNotNil(mapped as? URLError)
+        XCTAssertNil(mapped as? BrainClientError)
+    }
+
+    /// Defensive: a non-URLError (decode error, timeout from BrainClient,
+    /// etc.) must NOT be reclassified as a Local Network denial.
+    func test_mapLocalNetworkError_ignores_non_URLError() {
+        struct Decode: Error {}
+        let brain = URL(string: "http://192.168.18.10:9090")!
+        let mapped = PairingClient.mapLocalNetworkError(Decode(), brainURL: brain)
+        XCTAssertNil(mapped as? BrainClientError)
+    }
+
+    @MainActor
+    func test_LocalNetworkAuthorization_starts_undetermined() {
+        let auth = LocalNetworkAuthorization()
+        XCTAssertEqual(auth.state, .undetermined)
+        auth.reset()
+        XCTAssertEqual(auth.state, .undetermined)
+    }
+
     // MARK: - Phase 1 truthfulness sweep
     //
     // These tests pin the contract that drove Phase 1: a Bluetooth
