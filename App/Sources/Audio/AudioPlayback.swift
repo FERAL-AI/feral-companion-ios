@@ -14,6 +14,12 @@ public final class AudioPlayback {
     private var lastInputSampleRate: Double = 0
     private var configured = false
 
+    /// Count of scheduled buffers that haven't yet hit their
+    /// completion handler. Lowered by `bufferDidFinish()`; when it
+    /// hits zero we release the TTS auto-mute so the mic resumes
+    /// streaming user audio to the brain.
+    private var outstandingBuffers: Int = 0
+
     public init() {}
 
     /// Decode a PCM16 chunk and schedule it for playback. The first
@@ -138,27 +144,6 @@ public final class AudioPlayback {
         avPlayer.play()
         _ = isFinal
     }
-}
-
-/// AVAudioPlayer delegate hook used by ``AudioPlayback.enqueueCompressed``.
-/// Kept as a NSObject sidecar because ``AVAudioPlayerDelegate`` requires
-/// NSObject conformance and ``AudioPlayback`` is a value-semantics-leaning
-/// MainActor class — splitting the delegate keeps the conformance off
-/// the public API.
-private final class CompressedPlayerDelegate: NSObject, AVAudioPlayerDelegate {
-    var onFinish: ((AVAudioPlayer) -> Void)?
-    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully _: Bool) {
-        onFinish?(player)
-    }
-    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error _: Error?) {
-        onFinish?(player)
-    }
-
-    /// Count of scheduled buffers that haven't yet hit their
-    /// completion handler. Lowered by `bufferDidFinish()`; when it
-    /// hits zero we release the TTS auto-mute so the mic resumes
-    /// streaming user audio to the brain.
-    private var outstandingBuffers: Int = 0
 
     private func bufferDidFinish() {
         if outstandingBuffers > 0 { outstandingBuffers -= 1 }
@@ -201,5 +186,20 @@ private final class CompressedPlayerDelegate: NSObject, AVAudioPlayerDelegate {
             channels: 1,
             interleaved: true
         )
+    }
+}
+
+/// AVAudioPlayer delegate hook used by ``AudioPlayback.enqueueCompressed``.
+/// Kept as a NSObject sidecar because ``AVAudioPlayerDelegate`` requires
+/// NSObject conformance and ``AudioPlayback`` is a value-semantics-leaning
+/// MainActor class — splitting the delegate keeps the conformance off
+/// the public API.
+private final class CompressedPlayerDelegate: NSObject, AVAudioPlayerDelegate {
+    var onFinish: ((AVAudioPlayer) -> Void)?
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully _: Bool) {
+        onFinish?(player)
+    }
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error _: Error?) {
+        onFinish?(player)
     }
 }

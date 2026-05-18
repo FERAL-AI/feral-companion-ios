@@ -77,6 +77,11 @@ public enum BrainHTTP {
     /// not connected — callers should treat that as "no-op" instead of
     /// surfacing as an error since the views guard on connection state
     /// elsewhere.
+    ///
+    /// `@MainActor` because ``BrainClient`` is `@MainActor`-isolated and
+    /// reading `brainHTTPBase` from a nonisolated context fails to
+    /// compile under Swift 5.10+ strict concurrency.
+    @MainActor
     public static func endpoint(
         _ path: String,
         on brainClient: BrainClient
