@@ -118,9 +118,15 @@ struct MacPermissionsStepView: View {
         }
         guard let url = URL(string: "/api/system/permissions", relativeTo: base) else { return }
 
+        // Audit-r11 fix — Bug 2 (Status 401). The onboarding Mac
+        // permissions step polls a `_PHONE_BEARER_GET_PATHS`-gated
+        // endpoint; the unauthenticated call always 401s and the
+        // step never advances. Route through BrainHTTP so the bearer
+        // rides along.
+        let request = BrainHTTP.authorized(url, bearer: env.brain.phoneBearer)
         Task {
             do {
-                let (data, response) = try await URLSession.shared.data(from: url)
+                let (data, response) = try await URLSession.shared.data(for: request)
                 guard let http = response as? HTTPURLResponse,
                       http.statusCode == 200 else {
                     isLoading = false
@@ -147,11 +153,17 @@ struct MacPermissionsStepView: View {
         guard let base = env.brain.brainHTTPBase else { return }
         guard let url = URL(string: "/api/system/permissions/open", relativeTo: base) else { return }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["permission_key": key])
-
+        // Audit-r11 fix — Bug 2 (Status 401). POST also goes through
+        // `_PHONE_BEARER_GET_PATHS`-style gating on the brain side
+        // (see `feral-core/api/server.py` `_phone_bearer_post_paths`)
+        // so we attach the bearer here too via BrainHTTP.
+        let body = try? JSONSerialization.data(withJSONObject: ["permission_key": key])
+        let request = BrainHTTP.authorized(
+            url,
+            bearer: env.brain.phoneBearer,
+            method: .post,
+            jsonBody: body
+        )
         _ = try? await URLSession.shared.data(for: request)
     }
 

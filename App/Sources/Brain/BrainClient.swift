@@ -36,6 +36,21 @@ public final class BrainClient: ObservableObject {
         self.state = newState
     }
 
+    /// Test-only seam used by `FeralCompanionTests` to inject a known
+    /// transcript prefix before exercising dedupe / voice fallback
+    /// frame handling. Must not be called from product code.
+    public func _injectTranscriptForTesting(_ messages: [BrainMessage]) {
+        self.transcript = messages
+    }
+
+    /// Test-only seam to drive `handleInbound` from XCTest without
+    /// stubbing the entire transport. Constructs a `HUPFrame` from the
+    /// raw `(type, payload)` pair so test cases stay readable.
+    public func _handleFrameForTesting(type: String, payload: [String: AnyCodable]) async {
+        let frame = HUPFrame(type: type, payload: payload)
+        await handleInbound(frame)
+    }
+
     /// Latest text turns from the brain (oldest first). Hosts append
     /// user-typed messages here too so chat views render uniformly.
     @Published public private(set) var transcript: [BrainMessage] = []
@@ -107,6 +122,53 @@ public final class BrainClient: ObservableObject {
         }
     }
     @Published public private(set) var genUI: GenUISurface? = nil
+
+    /// Cached `phone_bearer` for authenticated HTTP calls to the brain.
+    ///
+    /// Audit-r11 — Bug 2 (Context tab Status 401). Written by
+    /// ``ConnectionStore`` after a successful pair and on startup
+    /// (when the persisted bearer is restored from ``UserDefaults``).
+    /// All HTTP-issuing stores read this through ``BrainHTTP/authorized(_:bearer:method:jsonBody:timeout:)``
+    /// instead of calling ``URLSession.shared.data(from:)`` raw.
+    /// Setting to `nil` (e.g. on unpair) makes subsequent calls
+    /// anonymous — the brain will return 401 for `_PHONE_BEARER_GET_PATHS`
+    /// endpoints, which is correct.
+    @Published public var phoneBearer: String? = nil
+
+    /// Latest `voice_status` snapshot from the brain.
+    ///
+    /// Audit-r11 — Bug 3 (silent voice everywhere). When OpenAI
+    /// Realtime closes with `1013 insufficient_quota`, the brain emits
+    /// a `voice_status state=degraded reason=openai_realtime_quota`
+    /// frame and starts falling through to whisper TTS (`tts_chunk`
+    /// frames). When even the fallback fails the brain emits
+    /// `state=unavailable`. The chat view reads this to show a
+    /// "Voice unavailable — out of credit" banner instead of going
+    /// silent. Nil = healthy (no banner).
+    @Published public private(set) var voiceStatus: VoiceStatus? = nil
+
+    /// Brain-emitted voice subsystem health. Mirror of the wire shape
+    /// defined in `feral-core/models/protocol.py:VoiceStatusPayload`.
+    public struct VoiceStatus: Equatable {
+        public enum State: String {
+            case available
+            case degraded
+            case unavailable
+        }
+        public let state: State
+        public let reason: String
+        public let provider: String
+        public let fallbackProvider: String
+        public let detail: String
+
+        public init(state: State, reason: String, provider: String, fallbackProvider: String, detail: String) {
+            self.state = state
+            self.reason = reason
+            self.provider = provider
+            self.fallbackProvider = fallbackProvider
+            self.detail = detail
+        }
+    }
 
     private var node: FeralNode?
     private var inboundTask: Task<Void, Never>?
@@ -415,6 +477,25 @@ public final class BrainClient: ObservableObject {
                 if sid != chatSessionId { chatSessionId = sid }
             }
             if case .string(let text) = frame.payload["text"] ?? .null, !text.isEmpty {
+                // Audit-r11 — Bug 1 (iOS double assistant bubble).
+                // The brain-side fix (orchestrator
+                // `_text_response_suppressed` flag, see
+                // `feral-core/api/server.py` chat_request branch)
+                // guarantees only one frame per turn, but a stale
+                // brain build OR a future divergence where both
+                // surfaces emit could resurrect the bug. This
+                // belt-and-suspenders guard collapses any (role,
+                // text) duplicate landing within 2s of the previous
+                // assistant turn so the chat history can never
+                // double-render. Pinned by
+                // `FeralCompanionTests.test_BrainClient_dedupes_back_to_back_assistant_frames`.
+                if let last = transcript.last,
+                   last.role == .assistant,
+                   last.text == text,
+                   Date().timeIntervalSince(last.timestamp) < 2.0 {
+                    isAssistantSpeaking = false
+                    break
+                }
                 transcript.append(BrainMessage(role: .assistant, text: text))
                 isAssistantSpeaking = false
             }
@@ -477,6 +558,70 @@ public final class BrainClient: ObservableObject {
                 isAssistantSpeaking = !isFinal
                 await audioPlayback.enqueuePCM16(data, sampleRate: sampleRate, isFinal: isFinal)
                 if isFinal { isAssistantSpeaking = false }
+            }
+
+        case "tts_chunk":
+            // Audit-r11 — Bug 3 (silent voice). The brain's whisper
+            // TTS fallback path emits `tts_chunk` frames carrying
+            // base64-encoded compressed audio (mp3 by default, wav
+            // for the local Piper provider). Without this handler iOS
+            // dropped every chunk and the user heard nothing whenever
+            // the realtime PCM path went down (e.g. OpenAI
+            // insufficient_quota). Decode by `encoding` and hand off
+            // to `AudioPlayback.enqueueCompressed`.
+            if case .string(let b64) = frame.payload["data_b64"] ?? .null,
+               let data = Data(base64Encoded: b64) {
+                let isFinal: Bool = {
+                    if case .bool(let b) = frame.payload["is_final"] ?? .null { return b }
+                    return false
+                }()
+                let encoding: String = {
+                    if case .string(let s) = frame.payload["encoding"] ?? .null { return s }
+                    return "mp3"
+                }()
+                isAssistantSpeaking = !isFinal
+                await audioPlayback.enqueueCompressed(data, encoding: encoding, isFinal: isFinal)
+                if isFinal { isAssistantSpeaking = false }
+            }
+
+        case "voice_status":
+            // Audit-r11 — Bug 3 banner contract. Brain emits this
+            // when the realtime provider died (`state=degraded`,
+            // `reason=openai_realtime_quota`/`openai_realtime_auth`/etc)
+            // or when even the fallback failed (`state=unavailable`).
+            // Mirror into a typed `@Published voiceStatus` so ChatView
+            // can render a banner instead of silently going mute.
+            let stateRaw: String = {
+                if case .string(let s) = frame.payload["state"] ?? .null { return s }
+                return "available"
+            }()
+            let mapped = VoiceStatus.State(rawValue: stateRaw) ?? .available
+            let reason: String = {
+                if case .string(let s) = frame.payload["reason"] ?? .null { return s }
+                return ""
+            }()
+            let provider: String = {
+                if case .string(let s) = frame.payload["provider"] ?? .null { return s }
+                return ""
+            }()
+            let fallback: String = {
+                if case .string(let s) = frame.payload["fallback_provider"] ?? .null { return s }
+                return ""
+            }()
+            let detail: String = {
+                if case .string(let s) = frame.payload["detail"] ?? .null { return s }
+                return ""
+            }()
+            if mapped == .available {
+                voiceStatus = nil
+            } else {
+                voiceStatus = VoiceStatus(
+                    state: mapped,
+                    reason: reason,
+                    provider: provider,
+                    fallbackProvider: fallback,
+                    detail: detail
+                )
             }
 
         case "speech_started":
@@ -624,8 +769,15 @@ public final class BrainClient: ObservableObject {
             return
         }
 
+        // Audit-r11 fix — Bug 2 (Status 401). Backgrounded chat
+        // resume calls `/api/sessions/primary/transcript` which is in
+        // `_PHONE_BEARER_GET_PATHS` and requires the bearer. Before
+        // this, every reconcile after a cold launch silently failed
+        // with 401 and the iOS chat lost any turn the brain emitted
+        // while we were backgrounded.
+        let request = BrainHTTP.authorized(endpoint, bearer: phoneBearer)
         do {
-            let (data, response) = try await URLSession.shared.data(from: endpoint)
+            let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
             guard let messages = json["messages"] as? [[String: Any]] else { return }
