@@ -14,6 +14,12 @@ public final class AudioPlayback {
     private var lastInputSampleRate: Double = 0
     private var configured = false
 
+    /// Count of scheduled buffers that haven't yet hit their
+    /// completion handler. Lowered by `bufferDidFinish()`; when it
+    /// hits zero we release the TTS auto-mute so the mic resumes
+    /// streaming user audio to the brain.
+    private var outstandingBuffers: Int = 0
+
     public init() {}
 
     /// Decode a PCM16 chunk and schedule it for playback. The first
@@ -66,6 +72,8 @@ public final class AudioPlayback {
     public func stopAndDrain() async {
         player.stop()
         outstandingBuffers = 0
+        for cp in compressedPlayers { cp.stop() }
+        compressedPlayers.removeAll()
         VoiceMuteController.shared.stoppedPlayingTTS()
     }
 
@@ -74,15 +82,68 @@ public final class AudioPlayback {
         engine.stop()
         configured = false
         outstandingBuffers = 0
+        for cp in compressedPlayers { cp.stop() }
+        compressedPlayers.removeAll()
         VoiceMuteController.shared.stoppedPlayingTTS()
         W300AudioBridge.shared.deactivate(for: .playback)
     }
 
-    /// Count of scheduled buffers that haven't yet hit their
-    /// completion handler. Lowered by `bufferDidFinish()`; when it
-    /// hits zero we release the TTS auto-mute so the mic resumes
-    /// streaming user audio to the brain.
-    private var outstandingBuffers: Int = 0
+    // MARK: - Compressed (mp3 / wav) playback
+
+    /// Holders for in-flight ``AVAudioPlayer`` instances spawned by
+    /// ``enqueueCompressed(_:encoding:isFinal:)``. Kept strongly so the
+    /// player isn't ARC-reaped before its delegate fires
+    /// ``audioPlayerDidFinishPlaying``. Cleaned up on stop / completion.
+    private var compressedPlayers: [AVAudioPlayer] = []
+    private let compressedDelegate = CompressedPlayerDelegate()
+
+    /// Decode a compressed audio chunk (``mp3`` or ``wav``) and play
+    /// it sequentially. The brain emits these on the whisper / Piper
+    /// TTS fallback path when the realtime PCM provider died — without
+    /// this handler iOS dropped every fallback chunk and the assistant
+    /// went silent (operator report 2026-05-18). Each chunk is a full
+    /// self-contained file (`AudioPipeline.synthesize_speech` chunks
+    /// the synthesised mp3 into 32 KB pieces) so we leverage
+    /// ``AVAudioPlayer`` instead of routing through the PCM16
+    /// ``AVAudioEngine`` graph that ``enqueuePCM16`` uses — saves a
+    /// converter dance and keeps the fallback path honest about the
+    /// fact that fallback audio is non-realtime.
+    public func enqueueCompressed(_ data: Data, encoding: String, isFinal: Bool) async {
+        guard !data.isEmpty else { return }
+        do {
+            // Route audio through the same shared session so the
+            // assistant TTS comes out the same speaker the realtime
+            // path used (loudspeaker by default, A2DP if connected).
+            try W300AudioBridge.shared.activate(for: .playback)
+        } catch {
+            return
+        }
+
+        // ``AVAudioPlayer(data:)`` infers format from the container —
+        // works for mp3 + wav out of the box. ``fileTypeHint`` is a
+        // safety net for sources that omit the magic bytes.
+        let hint: AVFileType? = (encoding.lowercased() == "wav") ? .wav : .mp3
+        let avPlayer: AVAudioPlayer
+        do {
+            avPlayer = try AVAudioPlayer(data: data, fileTypeHint: hint?.rawValue)
+        } catch {
+            return
+        }
+        avPlayer.delegate = compressedDelegate
+        compressedDelegate.onFinish = { [weak self] player in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.compressedPlayers.removeAll { $0 === player }
+                self.bufferDidFinish()
+            }
+        }
+        avPlayer.prepareToPlay()
+        VoiceMuteController.shared.startedPlayingTTS()
+        outstandingBuffers += 1
+        compressedPlayers.append(avPlayer)
+        avPlayer.play()
+        _ = isFinal
+    }
 
     private func bufferDidFinish() {
         if outstandingBuffers > 0 { outstandingBuffers -= 1 }
@@ -125,5 +186,20 @@ public final class AudioPlayback {
             channels: 1,
             interleaved: true
         )
+    }
+}
+
+/// AVAudioPlayer delegate hook used by ``AudioPlayback.enqueueCompressed``.
+/// Kept as a NSObject sidecar because ``AVAudioPlayerDelegate`` requires
+/// NSObject conformance and ``AudioPlayback`` is a value-semantics-leaning
+/// MainActor class — splitting the delegate keeps the conformance off
+/// the public API.
+private final class CompressedPlayerDelegate: NSObject, AVAudioPlayerDelegate {
+    var onFinish: ((AVAudioPlayer) -> Void)?
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully _: Bool) {
+        onFinish?(player)
+    }
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error _: Error?) {
+        onFinish?(player)
     }
 }

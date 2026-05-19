@@ -361,4 +361,174 @@ final class FeralCompanionTests: XCTestCase {
             XCTFail("connect() should have been a no-op while already .connected; ended in .error: \(msg)")
         }
     }
+
+    // MARK: - Audit-r11 (v2026.5.31) — Bug 1 double bubble + Bug 2 401 + Bug 3 voice
+
+    /// Belt-and-suspenders guard for the iOS side of the double-bubble
+    /// fix. Even if the brain regresses and re-emits both
+    /// `text_response` AND `chat_response` per turn, the iOS chat must
+    /// render the assistant reply ONCE.
+    @MainActor
+    func test_BrainClient_dedupes_back_to_back_assistant_frames() async {
+        let client = BrainClient()
+        let now = Date()
+        let first = BrainMessage(role: .assistant, text: "Hello.", timestamp: now)
+        client._injectTranscriptForTesting([first])
+
+        // Simulate the brain emitting `chat_response` immediately after
+        // `text_response` for the same text within 2s. The handler
+        // must keep `transcript.count == 1`.
+        await client._handleFrameForTesting(
+            type: "chat_response",
+            payload: ["text": .string("Hello.")]
+        )
+
+        XCTAssertEqual(client.transcript.count, 1,
+                       "back-to-back identical assistant frames must be de-duplicated")
+    }
+
+    /// A second assistant frame with DIFFERENT text within 2s must
+    /// still be appended (we only collapse exact repeats).
+    @MainActor
+    func test_BrainClient_does_not_collapse_distinct_back_to_back_replies() async {
+        let client = BrainClient()
+        client._injectTranscriptForTesting([
+            BrainMessage(role: .assistant, text: "Sure.", timestamp: Date()),
+        ])
+        await client._handleFrameForTesting(
+            type: "chat_response",
+            payload: ["text": .string("Anything else?")]
+        )
+        XCTAssertEqual(client.transcript.count, 2)
+        XCTAssertEqual(client.transcript.last?.text, "Anything else?")
+    }
+
+    /// Pin: `BrainHTTP.authorized` attaches `Authorization: Bearer …`
+    /// when a bearer is provided. Without this header the Context tab,
+    /// Devices > BrainNetwork, transcript reconcile, and onboarding
+    /// Mac permissions all 401.
+    func test_BrainHTTP_authorized_attaches_bearer() {
+        let url = URL(string: "http://192.168.1.10:9090/api/context/live")!
+        let req = BrainHTTP.authorized(url, bearer: "test-bearer-abc")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer test-bearer-abc")
+        XCTAssertEqual(req.httpMethod, "GET")
+    }
+
+    /// Pin: empty / nil bearer produces an unauthenticated request
+    /// (intentional — anonymous fallback). The brain answers 401 for
+    /// gated paths and the polling stores expose that as `Status 401`.
+    func test_BrainHTTP_authorized_omits_header_when_bearer_missing() {
+        let url = URL(string: "http://192.168.1.10:9090/api/capabilities")!
+        let req = BrainHTTP.authorized(url, bearer: nil)
+        XCTAssertNil(req.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(req.httpMethod, "GET")
+    }
+
+    /// Pin: POST + json body shape matches the legacy Mac permissions
+    /// open call so existing brain handlers continue to parse it.
+    func test_BrainHTTP_authorized_post_with_json_sets_content_type() throws {
+        let url = URL(string: "http://192.168.1.10:9090/api/system/permissions/open")!
+        let body = try JSONSerialization.data(withJSONObject: ["permission_key": "screen_recording"])
+        let req = BrainHTTP.authorized(url, bearer: "b", method: .post, jsonBody: body)
+        XCTAssertEqual(req.httpMethod, "POST")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer b")
+        XCTAssertEqual(req.httpBody, body)
+    }
+
+    /// Pin: the brain's `voice_status state=degraded` frame populates
+    /// `BrainClient.voiceStatus` so ChatView's banner renders. Without
+    /// this contract, iOS stays silent and unaware of why.
+    @MainActor
+    func test_BrainClient_voice_status_degraded_sets_published_state() async {
+        let client = BrainClient()
+        await client._handleFrameForTesting(
+            type: "voice_status",
+            payload: [
+                "state": .string("degraded"),
+                "reason": .string("openai_realtime_quota"),
+                "provider": .string("openai"),
+                "fallback_provider": .string("whisper"),
+                "detail": .string("received 1013 (insufficient_quota)"),
+            ]
+        )
+        XCTAssertNotNil(client.voiceStatus)
+        XCTAssertEqual(client.voiceStatus?.state, .degraded)
+        XCTAssertEqual(client.voiceStatus?.reason, "openai_realtime_quota")
+        XCTAssertEqual(client.voiceStatus?.fallbackProvider, "whisper")
+    }
+
+    /// Pin: `state=available` clears the banner — the brain signals
+    /// recovery by re-emitting available.
+    @MainActor
+    func test_BrainClient_voice_status_available_clears_banner() async {
+        let client = BrainClient()
+        await client._handleFrameForTesting(
+            type: "voice_status",
+            payload: [
+                "state": .string("degraded"),
+                "reason": .string("openai_realtime_quota"),
+            ]
+        )
+        XCTAssertNotNil(client.voiceStatus)
+
+        await client._handleFrameForTesting(
+            type: "voice_status",
+            payload: ["state": .string("available")]
+        )
+        XCTAssertNil(client.voiceStatus)
+    }
+
+    /// Pin: `tts_chunk` frames carrying mp3 audio reach AudioPlayback
+    /// via the compressed-decode path so the whisper fallback is
+    /// audible on iOS. Asserts the dispatch contract by inspecting
+    /// the `isAssistantSpeaking` flag transitions the handler drives.
+    @MainActor
+    func test_BrainClient_tts_chunk_marks_speaking_then_idle_on_final() async {
+        let client = BrainClient()
+        // Synthesize a minimal "mp3" payload — AudioPlayback will
+        // refuse to decode the bytes but our contract here is the
+        // dispatcher-level state flips, not the underlying audio
+        // engine (already covered by AudioPlayback unit tests).
+        let fakeMp3 = Data([0xFF, 0xFB, 0x10, 0x00])
+        let b64 = fakeMp3.base64EncodedString()
+
+        await client._handleFrameForTesting(
+            type: "tts_chunk",
+            payload: [
+                "data_b64": .string(b64),
+                "encoding": .string("mp3"),
+                "is_final": .bool(false),
+            ]
+        )
+        XCTAssertTrue(client.isAssistantSpeaking)
+
+        await client._handleFrameForTesting(
+            type: "tts_chunk",
+            payload: [
+                "data_b64": .string(b64),
+                "encoding": .string("mp3"),
+                "is_final": .bool(true),
+            ]
+        )
+        XCTAssertFalse(client.isAssistantSpeaking)
+    }
+
+    /// Pin: ConnectionStore.applyPairing mirrors the bearer onto
+    /// BrainClient so polling stores carry the `Authorization` header
+    /// without each touching ConnectionStore directly.
+    @MainActor
+    func test_ConnectionStore_propagates_bearer_to_BrainClient_on_restore() {
+        let suite = "feral.test.\(UUID().uuidString)"
+        let testDefaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults().removePersistentDomain(forName: suite) }
+
+        let url = URL(string: "http://192.168.1.10:9090")!
+        testDefaults.set(url.absoluteString, forKey: "feral.brainURL")
+        testDefaults.set("restored-bearer", forKey: "feral.phoneBearer")
+
+        let conn = ConnectionStore(defaults: testDefaults)
+        XCTAssertEqual(conn.phoneBearer, "restored-bearer")
+        XCTAssertEqual(conn.brainClient.phoneBearer, "restored-bearer")
+    }
 }

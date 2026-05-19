@@ -33,6 +33,16 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Audit-r11 — Bug 3 banner. Render brain-reported voice
+            // health state above everything else (visible whether or
+            // not a GenUI surface is up) so the user knows why TTS is
+            // silent before they ever try to speak.
+            if let status = env.brain.voiceStatus {
+                VoiceStatusBanner(status: status)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+            }
+
             // Phase 5 / audit-r8 brief #04 — render the active GenUI
             // surface above the message list. Brain pushes via
             // `genui_push` and updates via `sdui_patch`; BrainClient
@@ -424,6 +434,75 @@ private struct ChatBubble: View {
         case .user: return .clear
         case .assistant: return FeralTheme.hairline
         case .system: return FeralTheme.stateWarn.opacity(0.3)
+        }
+    }
+}
+
+/// Audit-r11 — Bug 3 banner. Renders a single-line warning whenever
+/// the brain has signalled a degraded or unavailable voice subsystem.
+/// Tapping the banner can be wired later to open a deep link to the
+/// brain's billing / settings page; today it's purely informational so
+/// the assistant going silent is never a mystery.
+struct VoiceStatusBanner: View {
+    let status: BrainClient.VoiceStatus
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: status.state == .unavailable ? "speaker.slash.fill" : "exclamationmark.bubble.fill")
+                .foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(headline)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(FeralTheme.textPrimary)
+                if !subline.isEmpty {
+                    Text(subline)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(tint.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(tint.opacity(0.45), lineWidth: 1)
+        )
+    }
+
+    private var tint: Color {
+        status.state == .unavailable ? FeralTheme.stateWarn : FeralTheme.stateWarn.opacity(0.85)
+    }
+
+    private var headline: String {
+        switch status.state {
+        case .unavailable: return "Voice unavailable"
+        case .degraded: return "Voice degraded — using fallback TTS"
+        case .available: return ""
+        }
+    }
+
+    private var subline: String {
+        // Compact, human-readable reason. Surface a short hint per
+        // reason code so the user knows the next concrete action.
+        switch status.reason {
+        case "openai_realtime_quota":
+            return "OpenAI Realtime is out of credit. Top up at platform.openai.com/usage."
+        case "openai_realtime_auth":
+            return "OpenAI API key is invalid or expired."
+        case "openai_realtime_rate_limit":
+            return "OpenAI Realtime is rate-limited; retrying via fallback TTS."
+        case "fallback_tts_failed":
+            return "No fallback TTS provider is configured."
+        case "no_tts_provider":
+            return "No TTS provider configured in settings."
+        default:
+            return status.detail
         }
     }
 }

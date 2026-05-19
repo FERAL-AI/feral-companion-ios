@@ -69,6 +69,12 @@ public final class ConnectionStore: ObservableObject {
            let bearer = defaults.string(forKey: "feral.phoneBearer") {
             self.brainURL = url
             self.phoneBearer = bearer
+            // Audit-r11 fix — Bug 2 (Context 401). Restore the bearer
+            // onto BrainClient at launch too so the very first poll
+            // in BrainContextStore / BrainCapabilitiesStore /
+            // BrainClient.reconcileTranscriptFromBrain after a cold
+            // app start carries the auth header.
+            self.brainClient.phoneBearer = bearer
             self.status = .paired(brainURL: url, nodeId: self.nodeId)
         }
 
@@ -131,6 +137,13 @@ public final class ConnectionStore: ObservableObject {
 
             self.brainURL = decoded.brainURL
             self.phoneBearer = bearer
+            // Audit-r11 fix — Bug 2 (Context 401). Mirror the bearer
+            // onto BrainClient so the four polling stores
+            // (BrainContextStore, BrainCapabilitiesStore,
+            // BrainClient.reconcileTranscriptFromBrain,
+            // MacPermissionsStepView) can hit
+            // `_PHONE_BEARER_GET_PATHS` endpoints without a 401.
+            self.brainClient.phoneBearer = bearer
             self.defaults.set(decoded.brainURL.absoluteString, forKey: "feral.brainURL")
             self.defaults.set(bearer, forKey: "feral.phoneBearer")
             self.status = .paired(brainURL: decoded.brainURL, nodeId: self.nodeId)
@@ -249,6 +262,10 @@ public final class ConnectionStore: ObservableObject {
         defaults.removeObject(forKey: "feral.phoneBearer")
         brainURL = nil
         phoneBearer = nil
+        // Drop the mirrored bearer too so subsequent HTTP attempts go
+        // anonymous; without this, repaired-to-new-brain calls would
+        // ship the wrong bearer.
+        brainClient.phoneBearer = nil
         status = .unpaired
     }
 }

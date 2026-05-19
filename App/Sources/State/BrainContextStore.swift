@@ -40,7 +40,7 @@ public final class BrainContextStore: ObservableObject {
     }
 
     public func refresh() async {
-        guard let httpBase = brainClient?.brainHTTPBase else {
+        guard let client = brainClient, let httpBase = client.brainHTTPBase else {
             perceptionText = "Not connected."
             lastError = "Not connected to a brain."
             return
@@ -49,8 +49,13 @@ public final class BrainContextStore: ObservableObject {
             lastError = "Could not build URL"
             return
         }
+        // Audit-r11 fix — Bug 2 (Context tab "Status 401"). The brain
+        // gates `/api/context/live` behind `_PHONE_BEARER_GET_PATHS`,
+        // so this call MUST carry `Authorization: Bearer phone_bearer`
+        // or it 401s and the Context tab dies silent.
+        let request = BrainHTTP.authorized(url, bearer: client.phoneBearer)
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 lastError = "Status \((response as? HTTPURLResponse)?.statusCode ?? -1)"
                 return

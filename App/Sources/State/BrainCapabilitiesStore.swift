@@ -67,7 +67,7 @@ public final class BrainCapabilitiesStore: ObservableObject {
     }
 
     public func refresh() async {
-        guard let httpBase = brainClient?.brainHTTPBase else {
+        guard let client = brainClient, let httpBase = client.brainHTTPBase else {
             connectedNodes = []
             brainHostSkillCount = 0
             lastRefreshError = "Not connected to a brain."
@@ -77,8 +77,13 @@ public final class BrainCapabilitiesStore: ObservableObject {
             lastRefreshError = "Could not build /api/capabilities URL"
             return
         }
+        // Audit-r11 fix — Bug 2. `/api/capabilities` is in
+        // `_PHONE_BEARER_GET_PATHS` so it requires the bearer; without
+        // it the Devices view's BrainNetwork section silently shows
+        // "Not connected" even with a healthy WS up.
+        let request = BrainHTTP.authorized(url, bearer: client.phoneBearer)
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 lastRefreshError = "Brain returned status \((response as? HTTPURLResponse)?.statusCode ?? -1)"
                 return
