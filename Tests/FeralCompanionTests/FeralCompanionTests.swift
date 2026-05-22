@@ -345,6 +345,46 @@ final class FeralCompanionTests: XCTestCase {
         XCTAssertNil(second)
     }
 
+    /// CameraGlassesAdapter refuses to attach when the demo toggle is
+    /// off. THESIS_SCENARIOS S5 fallback: the camera never quietly
+    /// runs in the background — the user must opt in.
+    @MainActor
+    func testCameraGlassesAdapterRefusesAttachWhenDemoToggleOff() async {
+        UserDefaults.standard.set(false, forKey: "feral.demo.camera_as_glasses")
+        let adapter = CameraGlassesAdapter()
+        let node = FeralNode(brainURL: URL(string: "ws://test")!, apiKey: "k", nodeID: "feral-iphone-test")
+        do {
+            try await adapter.attach(to: node)
+            XCTFail("attach should throw adapterNotWired when toggle is off")
+        } catch FeralNodeError.adapterNotWired(_, let reason) {
+            XCTAssertTrue(reason.contains("Demo toggle"))
+        } catch {
+            XCTFail("unexpected error type: \(error)")
+        }
+    }
+
+    /// BLEPeripheralScanner refuses to start when the opt-in toggle is
+    /// off. THESIS_SCENARIOS S3 privacy contract.
+    @MainActor
+    func testBLEScannerRefusesToStartWhenOptInOff() async {
+        UserDefaults.standard.set(false, forKey: BLEPeripheralScanner.userToggleKey)
+        let scanner = BLEPeripheralScanner()
+        let node = FeralNode(brainURL: URL(string: "ws://test")!, apiKey: "k", nodeID: "feral-iphone-test")
+        scanner.start(emittingTo: node)
+        XCTAssertFalse(scanner.isActive, "scanner must not flip active without opt-in")
+    }
+
+    /// PermissionKey deeplink catalog mirrors the brain-side
+    /// security/macos_permissions.py:deeplink_for. Pins the contract.
+    func testPermissionDeeplinkCatalog() {
+        let keys = PermissionKey.allCases
+        for key in keys {
+            // Every key must have an associated deeplink — the in-app
+            // card renders an "Open Settings" button for every denial.
+            XCTAssertNotNil(key.deeplink, "missing deeplink for \(key.rawValue)")
+        }
+    }
+
     /// ``BrainHTTP.authorized`` attaches the bearer + User-Agent and
     /// renders the request anonymous when the bearer is missing.
     func testBrainHTTPAuthorizedAttachesBearerHeader() {

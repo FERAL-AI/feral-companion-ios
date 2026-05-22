@@ -89,6 +89,41 @@ enum PermissionStatus: String {
     }
 }
 
+/// Canonical ``x-apple.systempreferences:`` URL per permission so the
+/// in-app card's "Open Settings" button always points at the right
+/// pane after a denial.
+///
+/// Lane 11 R-PROD-004b: iOS-side counterpart of the Mac-side
+/// ``security/macos_permissions.py:deeplink_for`` catalog. Brain code
+/// and iOS code keep these in sync via the matching catalogs — any
+/// new permission lands in BOTH (and in
+/// ``feral-core/agents/permission_card.py:PERMISSION_CATALOG``).
+extension PermissionKey {
+    var deeplink: URL? {
+        switch self {
+        case .bluetooth:
+            return URL(string: "App-prefs:Bluetooth")
+        case .microphone:
+            return URL(string: "App-prefs:Privacy&path=MICROPHONE")
+        case .camera:
+            return URL(string: "App-prefs:Privacy&path=CAMERA")
+        case .contacts:
+            return URL(string: "App-prefs:Privacy&path=CONTACTS")
+        case .calendars:
+            return URL(string: "App-prefs:Privacy&path=CALENDARS")
+        case .music:
+            return URL(string: "App-prefs:Privacy&path=MEDIA_LIBRARY")
+        case .location:
+            return URL(string: "App-prefs:Privacy&path=LOCATION")
+        case .health:
+            // Apple does not expose a deeplink directly to the Health
+            // privacy pane; the in-app card directs the user through
+            // Settings -> Health -> Data Access & Devices.
+            return URL(string: "App-prefs:HEALTH")
+        }
+    }
+}
+
 /// Async helpers that read each iOS permission's current authorization
 /// status and request access.
 enum PermissionProbes {
