@@ -27,6 +27,16 @@ public final class BrainClient: ObservableObject {
 
     @Published public private(set) var state: State = .disconnected
 
+    /// Audit-r11 / Lane 11 (audit-r14) — cached `phone_bearer` for
+    /// REST endpoints that gate on the iOS bearer
+    /// (``_PHONE_BEARER_GET_PATHS`` + ``_PHONE_BEARER_POST_PATHS`` in
+    /// the brain's ``api/server.py``). ``ConnectionStore`` mirrors
+    /// the Keychain-loaded bearer here on launch and on every
+    /// successful pair so REST callers like ``BrainHTTP.ingest`` /
+    /// ``BrainHTTP.searchMemory`` can attach an ``Authorization:
+    /// Bearer …`` header on every call.
+    @Published public var phoneBearer: String? = nil
+
     /// Test-only seam used by `FeralCompanionTests` to drive the
     /// idempotency guard inside `ConnectionStore.connect()` without
     /// opening a real WebSocket. Must not be called from product code

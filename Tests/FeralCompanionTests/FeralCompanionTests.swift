@@ -294,4 +294,67 @@ final class FeralCompanionTests: XCTestCase {
             XCTFail("connect() should have been a no-op while already .connected; ended in .error: \(msg)")
         }
     }
+
+    // MARK: - Lane 11 (audit-r14) — Keychain bearer + BrainHTTP
+
+    /// PhoneBearerKeychain round-trips a token through ``kSecClassGenericPassword``.
+    /// Uses a per-test account so the entry doesn't collide with the
+    /// app's own primary bearer.
+    func testKeychainBearerRoundTrip() {
+        let acct = "feral.test.bearer.\(UUID().uuidString.prefix(8))"
+        defer { PhoneBearerKeychain.delete(account: String(acct)) }
+
+        let saved = PhoneBearerKeychain.save("tok-keychain-roundtrip", account: String(acct))
+        XCTAssertTrue(saved, "save should succeed on a sandboxed test account")
+
+        let loaded = PhoneBearerKeychain.load(account: String(acct))
+        XCTAssertEqual(loaded, "tok-keychain-roundtrip")
+
+        PhoneBearerKeychain.delete(account: String(acct))
+        XCTAssertNil(PhoneBearerKeychain.load(account: String(acct)))
+    }
+
+    /// First-launch migration from the legacy UserDefaults key. Pins
+    /// the contract that v2026.5.38 users keep their pairing on the
+    /// upgrade to the Keychain-storage build.
+    func testKeychainMigrationFromUserDefaults() {
+        let suite = "feral.test.\(UUID().uuidString)"
+        let testDefaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults().removePersistentDomain(forName: suite) }
+
+        let acct = "feral.test.migrate.\(UUID().uuidString.prefix(8))"
+        defer { PhoneBearerKeychain.delete(account: String(acct)) }
+
+        testDefaults.set("legacy-bearer-from-2026.5.38", forKey: "feral.phoneBearer")
+        let migrated = PhoneBearerKeychain.migrateFromUserDefaults(
+            defaults: testDefaults,
+            legacyKey: "feral.phoneBearer",
+            account: String(acct)
+        )
+        XCTAssertEqual(migrated, "legacy-bearer-from-2026.5.38")
+        XCTAssertEqual(PhoneBearerKeychain.load(account: String(acct)), "legacy-bearer-from-2026.5.38")
+        XCTAssertNil(testDefaults.string(forKey: "feral.phoneBearer"), "legacy copy must be cleared after migration")
+
+        // Re-running migration is a no-op (returns nil) — the Keychain
+        // already holds the value.
+        let second = PhoneBearerKeychain.migrateFromUserDefaults(
+            defaults: testDefaults,
+            legacyKey: "feral.phoneBearer",
+            account: String(acct)
+        )
+        XCTAssertNil(second)
+    }
+
+    /// ``BrainHTTP.authorized`` attaches the bearer + User-Agent and
+    /// renders the request anonymous when the bearer is missing.
+    func testBrainHTTPAuthorizedAttachesBearerHeader() {
+        let url = URL(string: "http://192.168.1.10:9090/api/memory/search")!
+        let withBearer = BrainHTTP.authorized(url, bearer: "abc.def", method: .post)
+        XCTAssertEqual(withBearer.value(forHTTPHeaderField: "Authorization"), "Bearer abc.def")
+        XCTAssertEqual(withBearer.value(forHTTPHeaderField: "User-Agent"), "FeralCompanion/iOS")
+        XCTAssertEqual(withBearer.httpMethod, "POST")
+
+        let anon = BrainHTTP.authorized(url, bearer: nil)
+        XCTAssertNil(anon.value(forHTTPHeaderField: "Authorization"))
+    }
 }

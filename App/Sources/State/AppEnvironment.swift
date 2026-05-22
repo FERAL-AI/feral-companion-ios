@@ -94,6 +94,11 @@ public final class AppEnvironment: ObservableObject {
         // "Connect" on the Devices tab so the iOS permission prompt is
         // tied to a clear user action.
         conn.deviceStore.bind(healthStore: conn.healthStore)
+        // Lane 11 (audit-r14) — bind BrainClient so HealthKitAdapter
+        // can drive BrainHTTP.ingest(.healthKit, ...) for brain memory
+        // writes alongside its realtime HUP device_event stream
+        // (THESIS_SCENARIOS S2).
+        conn.deviceStore.bind(brainClient: conn.brainClient)
         // Restore the user's previously-active adapter set so cold
         // launches send non-empty `node_register.capabilities` to the
         // brain. Otherwise every relaunch logs `caps: []` server-side.

@@ -64,11 +64,20 @@ public final class ConnectionStore: ObservableObject {
         }
 
         // Restore prior pairing.
+        // Audit-r14 Lane 11 — bearer storage moved from UserDefaults
+        // (unencrypted at rest) to Keychain
+        // (kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly). The
+        // one-shot migration on first launch keeps already-paired
+        // users from being logged out by the build that ships this
+        // change.
+        let migratedBearer = PhoneBearerKeychain.migrateFromUserDefaults(defaults: defaults)
+        let storedBearer = PhoneBearerKeychain.load() ?? migratedBearer
         if let urlString = defaults.string(forKey: "feral.brainURL"),
            let url = URL(string: urlString),
-           let bearer = defaults.string(forKey: "feral.phoneBearer") {
+           let bearer = storedBearer {
             self.brainURL = url
             self.phoneBearer = bearer
+            self.brainClient.phoneBearer = bearer
             self.status = .paired(brainURL: url, nodeId: self.nodeId)
         }
 
@@ -132,7 +141,11 @@ public final class ConnectionStore: ObservableObject {
             self.brainURL = decoded.brainURL
             self.phoneBearer = bearer
             self.defaults.set(decoded.brainURL.absoluteString, forKey: "feral.brainURL")
-            self.defaults.set(bearer, forKey: "feral.phoneBearer")
+            // Lane 11 (audit-r14): bearer in Keychain, not UserDefaults.
+            // The brain URL stays in UserDefaults because it isn't
+            // secret and the legacy mDNS lookup path also consumes it.
+            PhoneBearerKeychain.save(bearer)
+            self.defaults.removeObject(forKey: "feral.phoneBearer")
             self.status = .paired(brainURL: decoded.brainURL, nodeId: self.nodeId)
 
             // First-pair UX: auto-activate Apple Health so the brain
@@ -241,6 +254,10 @@ public final class ConnectionStore: ObservableObject {
         await brainClient.disconnect()
         defaults.removeObject(forKey: "feral.brainURL")
         defaults.removeObject(forKey: "feral.phoneBearer")
+        // Lane 11 (audit-r14): clear the Keychain entry too so a
+        // re-pair flows through completePair and writes a fresh
+        // bearer rather than reusing the stale one.
+        PhoneBearerKeychain.delete()
         brainURL = nil
         phoneBearer = nil
         status = .unpaired

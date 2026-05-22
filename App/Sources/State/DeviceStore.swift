@@ -84,6 +84,13 @@ public final class DeviceStore: ObservableObject {
     /// without waiting for the brain round-trip.
     private weak var healthStore: HealthStore?
 
+    /// Set after ``bind(brainClient:)``. THESIS_SCENARIOS S2 — adapters
+    /// that produce long-lived data (HealthKit at the moment, future
+    /// BLE peripheral discoveries) use this to drive
+    /// ``BrainHTTP.ingest`` so the brain memory tool surface answers
+    /// "What was my heart rate this morning?" from any device.
+    private weak var brainClient: BrainClient?
+
     private let defaults: UserDefaults
     private static let activeCapabilitiesKey = "feral.activeCapabilities"
 
@@ -103,6 +110,18 @@ public final class DeviceStore: ObservableObject {
 
     public func bind(healthStore: HealthStore) {
         self.healthStore = healthStore
+    }
+
+    /// Lane 11 (audit-r14) — bind the BrainClient so adapters can
+    /// drive ``BrainHTTP.ingest`` for long-lived brain memory writes
+    /// (in addition to their realtime HUP ``device_event`` stream).
+    public func bind(brainClient: BrainClient) {
+        self.brainClient = brainClient
+        for adapter in activeAdapters {
+            if let hk = adapter as? HealthKitAdapter {
+                hk.setBrainClient(brainClient)
+            }
+        }
     }
 
     /// Subscribe to the iOS Bluetooth power state. The monitor must
@@ -249,6 +268,7 @@ public final class DeviceStore: ObservableObject {
         // something happen even before they pair a brain.
         if let hk = adapter as? HealthKitAdapter {
             if let store = healthStore { hk.setHealthStore(store) }
+            if let client = brainClient { hk.setBrainClient(client) }
             Task { [weak self] in
                 do {
                     try await hk.requestPermissionsAndPrime()
