@@ -701,6 +701,8 @@ public struct BrainMessage: Identifiable, Equatable {
 public enum BrainClientError: Error, LocalizedError {
     case notConnected
     case invalidBrainURL(String)
+    /// iOS denied Local Network access for an RFC-1918 / .local brain host.
+    case localNetworkDenied(host: String)
 
     public var errorDescription: String? {
         switch self {
@@ -708,6 +710,8 @@ public enum BrainClientError: Error, LocalizedError {
             return "Brain client is not connected."
         case .invalidBrainURL(let s):
             return "Invalid brain URL: \(s)"
+        case .localNetworkDenied(let host):
+            return "Local Network access is required to reach \(host). Open Settings and enable Local Network for FERAL."
         }
     }
 }

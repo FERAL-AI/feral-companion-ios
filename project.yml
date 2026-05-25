@@ -125,7 +125,14 @@ targets:
         # and lives on the same Wi‑Fi as the phone. Without this
         # purpose string, iOS will deny the connection with a system
         # alert even when ATS allows it.
-        NSLocalNetworkUsageDescription: "FERAL connects to your local FERAL brain on this Wi-Fi network."
+        NSLocalNetworkUsageDescription: "FERAL needs Local Network access to discover and talk to your FERAL brain on this Wi-Fi. Without it, pairing cannot complete."
+        # iOS 17+ enforcement: any NWBrowser started without a matching
+        # NSBonjourServices entry is rejected with NoAuth(-65555) and the
+        # Local Network permission prompt never fires reliably.
+        NSBonjourServices:
+          - _feral._tcp
+          - _feral-phone._tcp
+          - _feral-probe._tcp
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.feral.companion

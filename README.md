@@ -45,9 +45,11 @@ The brain is device-agnostic. Adapters are device-specific. The app shell is bot
 
 ```bash
 brew install xcodegen
-xcodegen generate
+./scripts/bootstrap.sh   # always run after switching branches
 open FeralCompanion.xcodeproj
 ```
+
+`FeralCompanion.xcodeproj` is **gitignored** and regenerated from `project.yml`. If Xcode reports *"Build input files cannot be found"* for Swift files that are not on disk, your local `.xcodeproj` is stale — run `./scripts/bootstrap.sh` and rebuild.
 
 To build for a real iPhone you need an Apple Developer team configured in Xcode signing.
 

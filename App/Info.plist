@@ -33,8 +33,6 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>FERALHUPVersion</key>
-	<string>1.3.0</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSAppTransportSecurity</key>
@@ -50,6 +48,12 @@
 	<string>FERAL uses Bluetooth to connect to FERAL-compatible glasses and wristbands.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>FERAL uses Bluetooth to connect to FERAL-compatible glasses and wristbands.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_feral._tcp</string>
+		<string>_feral-phone._tcp</string>
+		<string>_feral-probe._tcp</string>
+	</array>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>FERAL reads and writes events in your Calendar so the brain can answer scheduling questions and add events you ask for.</string>
 	<key>NSCalendarsUsageDescription</key>
@@ -63,7 +67,7 @@
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>FERAL writes summaries to Apple Health when you ask the FERAL brain to log a workout or vital.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>FERAL connects to your local FERAL brain on this Wi-Fi network.</string>
+	<string>FERAL needs Local Network access to discover and talk to your FERAL brain on this Wi-Fi. Without it, pairing cannot complete.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>FERAL shares your approximate location with the FERAL brain for context-aware assistance.</string>
 	<key>NSMicrophoneUsageDescription</key>

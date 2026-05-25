@@ -131,8 +131,12 @@ public final class PairingClient {
         var comps = URLComponents(url: brainURL.appendingPathComponent("api/devices/pair/check"), resolvingAgainstBaseURL: false)!
         comps.queryItems = [URLQueryItem(name: "t", value: token)]
         guard let url = comps.url else { throw BrainClientError.invalidBrainURL(brainURL.absoluteString) }
-        let (data, _) = try await URLSession.shared.data(from: url)
-        return try JSONDecoder().decode(PairCheckResponse.self, from: data)
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            return try JSONDecoder().decode(PairCheckResponse.self, from: data)
+        } catch {
+            throw Self.mapLocalNetworkError(error, brainURL: brainURL)
+        }
     }
 
     /// `POST /api/devices/pair/verify_pin` — present the PIN.
@@ -142,9 +146,13 @@ public final class PairingClient {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["token": token, "pin": pin])
-        let (_, resp) = try await URLSession.shared.data(for: req)
-        if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw BrainClientError.invalidBrainURL("PIN verify failed: \(http.statusCode)")
+        do {
+            let (_, resp) = try await URLSession.shared.data(for: req)
+            if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                throw BrainClientError.invalidBrainURL("PIN verify failed: \(http.statusCode)")
+            }
+        } catch {
+            throw Self.mapLocalNetworkError(error, brainURL: brainURL)
         }
     }
 
@@ -159,8 +167,58 @@ public final class PairingClient {
             "token": token,
             "kind": "browser_node_v2",
         ])
-        let (data, _) = try await URLSession.shared.data(for: req)
-        return try JSONDecoder().decode(PairCompleteResponse.self, from: data)
+        do {
+            let (data, _) = try await URLSession.shared.data(for: req)
+            return try JSONDecoder().decode(PairCompleteResponse.self, from: data)
+        } catch {
+            throw Self.mapLocalNetworkError(error, brainURL: brainURL)
+        }
+    }
+
+    // MARK: - Local Network error mapping
+
+    /// Translate iOS's misleading "offline" URLError into a
+    /// `BrainClientError.localNetworkDenied` whenever the target host is
+    /// in RFC-1918 / link-local / .local space. The pair view then
+    /// renders an "Open Settings" button instead of the system's lie.
+    static func mapLocalNetworkError(_ error: Error, brainURL: URL) -> Error {
+        guard let url = error as? URLError else { return error }
+        let isLikelyLocalNetworkDenial: Bool = {
+            switch url.code {
+            case .notConnectedToInternet,
+                 .networkConnectionLost,
+                 .cannotConnectToHost,
+                 .cannotFindHost,
+                 .timedOut:
+                return true
+            default:
+                return false
+            }
+        }()
+        guard isLikelyLocalNetworkDenial else { return error }
+        guard let host = brainURL.host, Self.isRFC1918OrLocal(host) else { return error }
+        return BrainClientError.localNetworkDenied(host: host)
+    }
+
+    /// Returns true when `host` is an RFC-1918 private address, a
+    /// `.local` mDNS name, or a link-local IPv4 / IPv6 host. Pair flow
+    /// is the only consumer; gives us a tight predicate so we never
+    /// misclassify a public host outage as a permission issue.
+    static func isRFC1918OrLocal(_ host: String) -> Bool {
+        if host.hasSuffix(".local") || host == "localhost" { return true }
+        // IPv6 link-local
+        if host.lowercased().hasPrefix("fe80::") { return true }
+        // IPv4 dotted-quad ranges
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else { return false }
+        switch (parts[0], parts[1]) {
+        case (10, _): return true
+        case (192, 168): return true
+        case (172, let b) where (16...31).contains(b): return true
+        case (169, 254): return true // link-local
+        case (127, _): return true
+        default: return false
+        }
     }
 
     /// Convert an HTTP brain URL into the WebSocket URL for `/v1/node`.

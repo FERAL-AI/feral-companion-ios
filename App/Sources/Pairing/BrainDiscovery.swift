@@ -16,11 +16,23 @@ struct DiscoveredBrain: Identifiable, Hashable {
 /// Scans the local network for FERAL brains advertising `_feral._tcp`
 /// via Bonjour/mDNS. Publishes discovered brains for the onboarding
 /// wizard's brain-discover step.
+///
+/// Before browsing, primes `LocalNetworkAuthorization` so iOS surfaces
+/// the Local Network permission prompt up-front. Without that, the
+/// first HTTP fetch to an RFC-1918 brain address is what triggers the
+/// gate, and iOS silently denies it and reports `-1009 "Internet
+/// connection appears to be offline"` instead of prompting the user.
 @MainActor
 final class BrainDiscovery: ObservableObject {
     @Published private(set) var discovered: [DiscoveredBrain] = []
     @Published private(set) var isScanning: Bool = false
 
+    /// Local Network authorisation state, kept in sync with the
+    /// `LocalNetworkAuthorization` probe so pair views can render a
+    /// denial banner without recomputing the gate themselves.
+    @Published private(set) var authorization: LocalNetworkAuthorization.State = .undetermined
+
+    private let auth = LocalNetworkAuthorization()
     private var browser: NWBrowser?
 
     func startScan() {
@@ -28,6 +40,46 @@ final class BrainDiscovery: ObservableObject {
         discovered = []
         isScanning = true
 
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.auth.prime()
+            self.authorization = result
+            // Only attach the user-visible browser if iOS has authorised
+            // Local Network access. If denied, BrainDiscoverStepView
+            // renders the "Open Settings" banner; spinning up the
+            // real browser would just spew another NoAuth(-65555).
+            if result == .granted {
+                self.attachBrowser()
+            } else {
+                self.isScanning = false
+            }
+        }
+    }
+
+    func stopScan() {
+        browser?.cancel()
+        browser = nil
+        isScanning = false
+    }
+
+    /// Re-probe Local Network authorisation after the user returns from
+    /// the iOS Settings app. Call from the pair screen's scenePhase
+    /// `.active` handler so a granted permission picks up scanning
+    /// without forcing the user to back out and retry pairing.
+    func refreshAuthorization() {
+        auth.reset()
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.auth.prime()
+            self.authorization = result
+            if result == .granted, self.browser == nil {
+                self.isScanning = true
+                self.attachBrowser()
+            }
+        }
+    }
+
+    private func attachBrowser() {
         let params = NWParameters()
         params.includePeerToPeer = true
         let descriptor = NWBrowser.Descriptor.bonjour(type: "_feral._tcp", domain: nil)
@@ -56,12 +108,6 @@ final class BrainDiscovery: ObservableObject {
         self.browser = b
     }
 
-    func stopScan() {
-        browser?.cancel()
-        browser = nil
-        isScanning = false
-    }
-
     private func handleResults(_ results: Set<NWBrowser.Result>) {
         var brains: [DiscoveredBrain] = []
         for result in results {
@@ -81,10 +127,12 @@ final class BrainDiscovery: ObservableObject {
     /// Resolve a discovered brain's host + port via an NWConnection
     /// endpoint resolution. Falls back to the name if resolution fails.
     func resolve(_ brain: DiscoveredBrain, completion: @escaping (String, Int) -> Void) {
-        let endpoint: NWEndpoint
-        if case let name = brain.name {
-            endpoint = .service(name: name, type: "_feral._tcp", domain: "local.", interface: nil)
-        }
+        let endpoint: NWEndpoint = .service(
+            name: brain.name,
+            type: "_feral._tcp",
+            domain: "local.",
+            interface: nil
+        )
 
         let connection = NWConnection(to: endpoint, using: .tcp)
         connection.stateUpdateHandler = { state in
