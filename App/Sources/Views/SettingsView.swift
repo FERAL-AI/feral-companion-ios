@@ -21,7 +21,16 @@ struct SettingsView: View {
                 if env.connection.brainURL != nil {
                     diagnosticsCard
                 }
+                #if DEBUG
+                // W20 release-build hygiene: debug-only UI gate. The
+                // log viewer ships only in DEBUG builds so a TestFlight
+                // operator never sees raw adapter spew or pair-attempt
+                // dumps. The DebugLog singleton itself stays
+                // unconditional (referenced by `.warning(...)` call
+                // sites across the app); only its visible surface is
+                // gated.
                 debugCard
+                #endif
                 aboutCard
                 setupCard
             }
@@ -233,11 +242,31 @@ struct SettingsView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(FeralTheme.textPrimary)
             }
-            labeledRow("Companion", value: "0.5.0 (Phase 7b)")
+            // W20 release-build hygiene — read marketing + build
+            // numbers from the bundle at runtime instead of a
+            // hardcoded "0.5.0 (Phase 7b)" string. The display now
+            // tracks `project.yml` -> `xcodegen generate` ->
+            // `CFBundleShortVersionString` automatically, so a
+            // TestFlight uploader never has to touch SwiftUI to bump
+            // the visible version.
+            labeledRow("Companion", value: companionVersionString)
             labeledRow("HUP", value: FeralNodeSDKInfo.hupVersion)
             labeledRow("Bundle", value: Bundle.main.bundleIdentifier ?? "?")
         }
         .feralCard(.thin, radius: .md)
+    }
+
+    /// Marketing + build version pair sourced from
+    /// `Bundle.main.infoDictionary` at runtime. Format: ``"X.Y.Z (B)"``
+    /// where ``X.Y.Z`` is `CFBundleShortVersionString` and ``B`` is
+    /// `CFBundleVersion`. Falls back to ``"unknown"`` if the keys are
+    /// missing (should never happen on a real build, but the guard
+    /// keeps the row readable on a misconfigured Info.plist).
+    private var companionVersionString: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let short = info["CFBundleShortVersionString"] as? String ?? "unknown"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        return "\(short) (\(build))"
     }
 
     // MARK: - Components

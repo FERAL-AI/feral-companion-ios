@@ -76,8 +76,13 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: FERAL
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        # Synced with the brain wheel on PyPI (feral-core 2026.5.44).
+        # Bumped from 0.1.0 alongside the v1.0 iOS last-mile (S2/S3/S5
+        # closures) so TestFlight and the brain agree on the release
+        # tag. Bump in lockstep with `feral-core` whenever the iOS
+        # wire contract changes.
+        CFBundleShortVersionString: "2026.5.44"
+        CFBundleVersion: "44"
         UILaunchStoryboardName: LaunchScreen
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
