@@ -294,4 +294,107 @@ final class FeralCompanionTests: XCTestCase {
             XCTFail("connect() should have been a no-op while already .connected; ended in .error: \(msg)")
         }
     }
+
+    // MARK: - Lane 11 (audit-r14) — Keychain bearer + BrainHTTP
+
+    /// PhoneBearerKeychain round-trips a token through ``kSecClassGenericPassword``.
+    /// Uses a per-test account so the entry doesn't collide with the
+    /// app's own primary bearer.
+    func testKeychainBearerRoundTrip() {
+        let acct = "feral.test.bearer.\(UUID().uuidString.prefix(8))"
+        defer { PhoneBearerKeychain.delete(account: String(acct)) }
+
+        let saved = PhoneBearerKeychain.save("tok-keychain-roundtrip", account: String(acct))
+        XCTAssertTrue(saved, "save should succeed on a sandboxed test account")
+
+        let loaded = PhoneBearerKeychain.load(account: String(acct))
+        XCTAssertEqual(loaded, "tok-keychain-roundtrip")
+
+        PhoneBearerKeychain.delete(account: String(acct))
+        XCTAssertNil(PhoneBearerKeychain.load(account: String(acct)))
+    }
+
+    /// First-launch migration from the legacy UserDefaults key. Pins
+    /// the contract that v2026.5.38 users keep their pairing on the
+    /// upgrade to the Keychain-storage build.
+    func testKeychainMigrationFromUserDefaults() {
+        let suite = "feral.test.\(UUID().uuidString)"
+        let testDefaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults().removePersistentDomain(forName: suite) }
+
+        let acct = "feral.test.migrate.\(UUID().uuidString.prefix(8))"
+        defer { PhoneBearerKeychain.delete(account: String(acct)) }
+
+        testDefaults.set("legacy-bearer-from-2026.5.38", forKey: "feral.phoneBearer")
+        let migrated = PhoneBearerKeychain.migrateFromUserDefaults(
+            defaults: testDefaults,
+            legacyKey: "feral.phoneBearer",
+            account: String(acct)
+        )
+        XCTAssertEqual(migrated, "legacy-bearer-from-2026.5.38")
+        XCTAssertEqual(PhoneBearerKeychain.load(account: String(acct)), "legacy-bearer-from-2026.5.38")
+        XCTAssertNil(testDefaults.string(forKey: "feral.phoneBearer"), "legacy copy must be cleared after migration")
+
+        // Re-running migration is a no-op (returns nil) — the Keychain
+        // already holds the value.
+        let second = PhoneBearerKeychain.migrateFromUserDefaults(
+            defaults: testDefaults,
+            legacyKey: "feral.phoneBearer",
+            account: String(acct)
+        )
+        XCTAssertNil(second)
+    }
+
+    /// CameraGlassesAdapter refuses to attach when the demo toggle is
+    /// off. THESIS_SCENARIOS S5 fallback: the camera never quietly
+    /// runs in the background — the user must opt in.
+    @MainActor
+    func testCameraGlassesAdapterRefusesAttachWhenDemoToggleOff() async {
+        UserDefaults.standard.set(false, forKey: "feral.demo.camera_as_glasses")
+        let adapter = CameraGlassesAdapter()
+        let node = FeralNode(brainURL: URL(string: "ws://test")!, apiKey: "k", nodeID: "feral-iphone-test")
+        do {
+            try await adapter.attach(to: node)
+            XCTFail("attach should throw adapterNotWired when toggle is off")
+        } catch FeralNodeError.adapterNotWired(_, let reason) {
+            XCTAssertTrue(reason.contains("Demo toggle"))
+        } catch {
+            XCTFail("unexpected error type: \(error)")
+        }
+    }
+
+    /// BLEPeripheralScanner refuses to start when the opt-in toggle is
+    /// off. THESIS_SCENARIOS S3 privacy contract.
+    @MainActor
+    func testBLEScannerRefusesToStartWhenOptInOff() async {
+        UserDefaults.standard.set(false, forKey: BLEPeripheralScanner.userToggleKey)
+        let scanner = BLEPeripheralScanner()
+        let node = FeralNode(brainURL: URL(string: "ws://test")!, apiKey: "k", nodeID: "feral-iphone-test")
+        scanner.start(emittingTo: node)
+        XCTAssertFalse(scanner.isActive, "scanner must not flip active without opt-in")
+    }
+
+    /// PermissionKey deeplink catalog mirrors the brain-side
+    /// security/macos_permissions.py:deeplink_for. Pins the contract.
+    func testPermissionDeeplinkCatalog() {
+        let keys = PermissionKey.allCases
+        for key in keys {
+            // Every key must have an associated deeplink — the in-app
+            // card renders an "Open Settings" button for every denial.
+            XCTAssertNotNil(key.deeplink, "missing deeplink for \(key.rawValue)")
+        }
+    }
+
+    /// ``BrainHTTP.authorized`` attaches the bearer + User-Agent and
+    /// renders the request anonymous when the bearer is missing.
+    func testBrainHTTPAuthorizedAttachesBearerHeader() {
+        let url = URL(string: "http://192.168.1.10:9090/api/memory/search")!
+        let withBearer = BrainHTTP.authorized(url, bearer: "abc.def", method: .post)
+        XCTAssertEqual(withBearer.value(forHTTPHeaderField: "Authorization"), "Bearer abc.def")
+        XCTAssertEqual(withBearer.value(forHTTPHeaderField: "User-Agent"), "FeralCompanion/iOS")
+        XCTAssertEqual(withBearer.httpMethod, "POST")
+
+        let anon = BrainHTTP.authorized(url, bearer: nil)
+        XCTAssertNil(anon.value(forHTTPHeaderField: "Authorization"))
+    }
 }

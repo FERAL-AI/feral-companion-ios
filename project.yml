@@ -1,11 +1,18 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/yonaskolb/XcodeGen/master/Docs/spec.json
 #
 # xcodegen spec for FERAL Companion. Regenerate the Xcode project with:
-#   xcodegen generate
+#   ./scripts/bootstrap.sh
 #
 # This file is the source of truth for the Xcode target. The generated
 # .xcodeproj is gitignored; CI and operators always regenerate from this
 # spec to avoid pbxproj merge conflicts.
+#
+# Optional proprietary vendor frameworks (JWBle, Realtek RTK*) are merged
+# from project.vendor.generated.yml when present on disk — see
+# scripts/generate-vendor-yml.sh and README.md → Vendor SDKs.
+
+include:
+  - project.vendor.generated.yml
 
 name: FeralCompanion
 options:
@@ -38,46 +45,22 @@ targets:
     sources:
       - path: App/Sources
       - path: Sources/FeralNodeSDK
-      # JWBle.framework bundles its own FMDatabase.o + FMResultSet.o
-      # but NOT the (FMDatabaseAdditions) category. Compile JUST the
-      # additions .m so its category methods (getTableSchema:, etc.)
-      # register with the runtime FMDatabase class shipped inside
-      # JWBle.framework. Do NOT add the rest of Vendor/FMDB to
-      # sources — that would duplicate-symbol against JWBle.
-      # Without this fix JieLi's JWBleDBModel.createTable crashes
-      # the app at SDK init with:
-      #   *** -[FMDatabase getTableSchema:]: unrecognized selector
-      - path: Vendor/FMDB/FMDatabaseAdditions.m
-      - path: Vendor/FMDB/FMDatabaseAdditions.h
+      # FMDatabaseAdditions is added by project.vendor.generated.yml when
+      # JWBle.framework is present (see generate-vendor-yml.sh).
     resources:
       - path: App/Assets.xcassets
       - path: App/LaunchScreen.storyboard
-    dependencies:
-      # Vendor frameworks live in Vendor/ and are gitignored. The
-      # operator drops the .framework bundles into Vendor/ once;
-      # CI re-fetches them from the secured asset bucket. Each one
-      # is embed=true so the .ipa carries them.
-      - framework: Vendor/JWBle.framework
-        embed: true
-        codeSign: true
-      - framework: Vendor/CocoaLumberjack.framework
-        embed: true
-        codeSign: true
-      - framework: Vendor/RTKAudioConnectSDK.framework
-        embed: true
-        codeSign: true
-      - framework: Vendor/RTKLEFoundation.framework
-        embed: true
-        codeSign: true
-      - framework: Vendor/RTKOTASDK.framework
-        embed: true
-        codeSign: true
     info:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: FERAL
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        # Synced with the brain wheel on PyPI (feral-core 2026.5.44).
+        # Bumped from 0.1.0 alongside the v1.0 iOS last-mile (S2/S3/S5
+        # closures) so TestFlight and the brain agree on the release
+        # tag. Bump in lockstep with `feral-core` whenever the iOS
+        # wire contract changes.
+        CFBundleShortVersionString: "2026.5.44"
+        CFBundleVersion: "44"
         UILaunchStoryboardName: LaunchScreen
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -125,7 +108,14 @@ targets:
         # and lives on the same Wi‑Fi as the phone. Without this
         # purpose string, iOS will deny the connection with a system
         # alert even when ATS allows it.
-        NSLocalNetworkUsageDescription: "FERAL connects to your local FERAL brain on this Wi-Fi network."
+        NSLocalNetworkUsageDescription: "FERAL needs Local Network access to discover and talk to your FERAL brain on this Wi-Fi. Without it, pairing cannot complete."
+        # iOS 17+ enforcement: any NWBrowser started without a matching
+        # NSBonjourServices entry is rejected with NoAuth(-65555) and the
+        # Local Network permission prompt never fires reliably.
+        NSBonjourServices:
+          - _feral._tcp
+          - _feral-phone._tcp
+          - _feral-probe._tcp
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.feral.companion
@@ -146,19 +136,8 @@ targets:
       - Tests/FeralCompanionTests
     dependencies:
       - target: FeralCompanion
-      # Vendor frameworks are needed for module resolution on the test
-      # bundle. `@testable import FeralCompanion` re-exposes types
-      # whose Swift signatures reference the vendor `import JWBle`
-      # statement (e.g. `JWBleSession.Phase`); without these listed
-      # here, compilation fails with "Unable to resolve module
-      # dependency: 'JWBle'". `embed: false` because the host app
-      # already embeds them — the test bundle loads against the host.
-      - framework: Vendor/JWBle.framework
-        embed: false
-        codeSign: false
-      - framework: Vendor/CocoaLumberjack.framework
-        embed: false
-        codeSign: false
+      # Vendor frameworks are added by project.vendor.generated.yml
+      # when present on disk.
     settings:
       base:
         BUNDLE_LOADER: $(TEST_HOST)

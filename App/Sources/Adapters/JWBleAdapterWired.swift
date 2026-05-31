@@ -1,5 +1,7 @@
 import Foundation
 import Combine
+
+#if canImport(JWBle)
 import JWBle
 
 /// Real, wired JieLi W300 vendor adapter. Replaces the SDK-shipped
@@ -446,3 +448,5 @@ public final class JWBleAdapterWired: VendorAdapter {
 
     private var pollTickCount: UInt = 0
 }
+#endif
+

@@ -1,18 +1,11 @@
 import SwiftUI
-import JWBle
 
 /// Modal that drives the JieLi BLE scan/connect lifecycle for the
 /// Theora glasses. Uses `JWBleSession` (singleton) as the source of
 /// truth for discovered peripherals + connection phase.
 ///
-/// Flow:
-///   1. Sheet appears -> `installCallbacksIfNeeded` + `startScanOnly`
-///   2. List of discovered devices populates as advertisements arrive
-///   3. User taps a row -> `connect(entry)` -> phase moves through
-///      .connecting -> .ready (SyncSuccess) or .failed
-///   4. On `.ready`, the parent's `onConnected` callback fires which
-///      flips the corresponding DeviceStore entry to `.active` so the
-///      JWBleAdapterWired emit pipe opens. Sheet auto-dismisses.
+/// When the proprietary JWBle SDK is absent, shows an unavailable
+/// message instead of attempting scan/connect.
 struct BLEScanView: View {
     @EnvironmentObject var env: AppEnvironment
     @StateObject private var session = JWBleSession.shared
@@ -26,6 +19,42 @@ struct BLEScanView: View {
     let title: String
 
     var body: some View {
+        if JWBleSession.isSDKAvailable {
+            scanContent
+        } else {
+            sdkUnavailableContent
+        }
+    }
+
+    private var sdkUnavailableContent: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 48, weight: .thin))
+                    .foregroundStyle(.secondary)
+                Text(JWBleSession.sdkUnavailableReason)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                Text("The app builds and runs without proprietary hardware SDKs. Contact Theora to obtain the JWBle framework bundle, then drop it into Vendor/ and run ./scripts/bootstrap.sh.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") { isPresented = false }
+                }
+            }
+        }
+    }
+
+    private var scanContent: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 phaseHeader
@@ -64,10 +93,6 @@ struct BLEScanView: View {
             session.stopScan()
         }
         .onChange(of: session.phase) { phase in
-            // SyncSuccess -> activate the adapter capability so
-            // JWBleAdapterWired starts emitting HUP frames, then
-            // dismiss the sheet after a short delay so the user sees
-            // the success state.
             if case .ready = phase {
                 env.devices.activate(capabilityId)
                 Task { @MainActor in

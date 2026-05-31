@@ -41,8 +41,16 @@ public final class DebugLog: ObservableObject {
         if entries.count > capacity {
             entries.removeFirst(entries.count - capacity)
         }
-        // Mirror to Xcode console for when the debugger IS attached.
+        // Lane 11 (audit-r14) — DEBUG-only console mirror. The
+        // Release build no longer emits one ``NSLog`` per UI event
+        // (the prior behaviour leaked the entire chat / pair /
+        // memory-fetch trace into Console.app for anyone with
+        // physical access to the device, even with the in-app
+        // viewer hidden). The in-app entries list is unchanged so
+        // operators can still inspect history from Settings.
+        #if DEBUG
         let stamp = ISO8601DateFormatter().string(from: entry.timestamp)
         NSLog("[FERAL][\(level.rawValue.uppercased())] \(stamp) \(message)")
+        #endif
     }
 }

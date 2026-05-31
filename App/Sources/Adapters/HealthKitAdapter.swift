@@ -23,6 +23,7 @@ public final class HealthKitAdapter: VendorAdapter {
     private let store = HKHealthStore()
     private weak var attachedNode: FeralNode?
     private weak var healthStore: HealthStore?
+    private weak var brainClient: BrainClient?
     private var pollTimer: Timer?
     private let pollInterval: TimeInterval
     private var permissionsGranted = false
@@ -30,6 +31,17 @@ public final class HealthKitAdapter: VendorAdapter {
     public init(pollInterval: TimeInterval = 30, healthStore: HealthStore? = nil) {
         self.pollInterval = pollInterval
         self.healthStore = healthStore
+    }
+
+    /// THESIS_SCENARIOS S2 — bind a ``BrainClient`` so HealthKit
+    /// samples land in the brain's memory store (via
+    /// ``BrainHTTP.ingest(.healthKit, ...)``) in addition to the
+    /// HUP ``device_event`` realtime stream. Without this only the
+    /// orchestrator's working memory sees the readings; the brain's
+    /// long-lived memory record stays empty and "What was my heart
+    /// rate this morning?" misses on the WebUI side.
+    public func setBrainClient(_ client: BrainClient) {
+        self.brainClient = client
     }
 
     /// Inject the app's `HealthStore` so device-event emits also surface
@@ -306,6 +318,44 @@ public final class HealthKitAdapter: VendorAdapter {
                 payload["sample_source"] = .string(sampleSource)
             }
             try? await node.emit(eventType: eventType, data: payload)
+        }
+        // THESIS_SCENARIOS S2 — also write a brain memory record via
+        // BrainHTTP so the long-lived memory tool surface answers
+        // "What was my heart rate this morning?" from any device,
+        // not just the active orchestrator working memory.
+        await ingestToBrainMemory(eventType: eventType, data: data, sampleSource: sampleSource)
+    }
+
+    /// Bridge a single sample to the brain's ``/api/health/ingest``
+    /// route. Errors are swallowed (we already emitted a realtime
+    /// ``device_event``; the ingest path is best-effort) but logged
+    /// so the DebugLog captures persistent failures.
+    private func ingestToBrainMemory(
+        eventType: String,
+        data: [String: AnyCodable],
+        sampleSource: String
+    ) async {
+        guard let brainClient = brainClient else { return }
+        guard let bearer = brainClient.phoneBearer, !bearer.isEmpty else { return }
+
+        var payload = data
+        payload["event_type"] = .string(eventType)
+        payload["source"] = .string("apple_healthkit")
+        payload["pipeline"] = .string("Apple Health")
+        if !sampleSource.isEmpty {
+            payload["sample_source"] = .string(sampleSource)
+        }
+        payload["sampled_at_ms"] = .double(Date().timeIntervalSince1970 * 1000)
+
+        do {
+            _ = try await BrainHTTP.ingest(
+                .healthKit,
+                samples: [BrainHTTP.IngestSample(payload)],
+                bearer: bearer,
+                on: brainClient
+            )
+        } catch {
+            DebugLog.shared.warning("healthkit ingest failed: \(error.localizedDescription)")
         }
     }
 
