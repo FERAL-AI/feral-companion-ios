@@ -207,7 +207,9 @@ public final class DeviceStore: ObservableObject {
                 displayName: "Theora Glasses",
                 summary: "Theora prototype glasses (W300 platform). HR, SpO2, body temp, UV, steps, vibration over BLE.",
                 category: .bluetooth,
-                status: .available
+                status: JWBleSession.isSDKAvailable
+                    ? .available
+                    : .unsupported(reason: JWBleSession.sdkUnavailableReason)
             ),
             Entry(
                 id: "veepoo_wristband",
@@ -282,9 +284,11 @@ public final class DeviceStore: ObservableObject {
         // Audit-r9 brief #06 B1 fix: the JWBle adapter must also write
         // to local HealthStore so the Vitals tab reflects the W300
         // stream (not just HealthKit). See JWBleAdapterWired comments.
+        #if canImport(JWBle)
         if let jw = adapter as? JWBleAdapterWired, let store = healthStore {
             jw.setHealthStore(store)
         }
+        #endif
     }
 
     /// Drop user intent for the capability and remove its adapter. For
@@ -315,10 +319,11 @@ public final class DeviceStore: ObservableObject {
         case "iphone_camera":
             return CameraPermissionAdapter()
         case "jw_health_glasses":
-            // Real wired adapter — Vendor frameworks must be present
-            // at Vendor/JWBle.framework. The companion app target
-            // links + embeds them via project.yml.
+            #if canImport(JWBle)
             return JWBleAdapterWired()
+            #else
+            return JWBleAdapter()
+            #endif
         case "veepoo_wristband":
             return VeepooAdapter()
         case "w610_glasses":

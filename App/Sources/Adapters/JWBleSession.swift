@@ -1,16 +1,18 @@
 import Foundation
 import SwiftUI
-import JWBle
 
 /// Singleton BLE lifecycle manager for the JieLi W300 glasses.
 /// `@MainActor ObservableObject` so SwiftUI views can bind directly
-/// to `phase` and `discovered`. JWBle callbacks arrive on arbitrary
-/// queues; every mutation hops to MainActor before touching
-/// `@Published` state.
+/// to `phase` and `discovered`. When the proprietary JWBle SDK is
+/// absent, methods are no-ops and hardware features report unavailable.
 @MainActor
 public final class JWBleSession: ObservableObject {
 
     public static let shared = JWBleSession()
+
+    /// Shown in UI and DeviceStore when the JWBle SDK is not linked.
+    public static let sdkUnavailableReason =
+        "Vendor SDK not installed — contact Theora for SDK access"
 
     // MARK: - Published State
 
@@ -27,7 +29,9 @@ public final class JWBleSession: ObservableObject {
         public let name: String
         public let macAddress: String?
         public let rssi: Int
-        public let model: JWBleDeviceModel
+        #if canImport(JWBle)
+        let sdkModel: JWBleDeviceModel
+        #endif
 
         public static func == (lhs: Discovered, rhs: Discovered) -> Bool {
             lhs.id == rhs.id && lhs.rssi == rhs.rssi
@@ -36,6 +40,15 @@ public final class JWBleSession: ObservableObject {
 
     @Published public private(set) var phase: Phase = .idle
     @Published public private(set) var discovered: [Discovered] = []
+
+    /// True when the proprietary JWBle.framework is linked into this build.
+    public static var isSDKAvailable: Bool {
+        #if canImport(JWBle)
+        return true
+        #else
+        return false
+        #endif
+    }
 
     // MARK: - Private
 
@@ -67,11 +80,72 @@ public final class JWBleSession: ObservableObject {
 
     // MARK: - Callback Installation
 
-    /// Install `connectStateChangeCallBack` exactly once. Also ensures
-    /// the JWBle SDK is initialized (`setUpWithUid`) so scan/connect
-    /// work even if `JWBleAdapterWired.attach(to:)` hasn't run yet
-    /// (e.g. user taps Connect before pairing a brain). Idempotent.
     public func installCallbacksIfNeeded() {
+        #if canImport(JWBle)
+        installCallbacksIfNeededSDK()
+        #else
+        guard !callbacksInstalled else { return }
+        callbacksInstalled = true
+        DebugLog.shared.warning("jwble: SDK not installed — hardware unavailable")
+        #endif
+    }
+
+    // MARK: - Scan
+
+    public func startScanOnly() {
+        #if canImport(JWBle)
+        startScanOnlySDK()
+        #else
+        discovered = []
+        phase = .failed(reason: Self.sdkUnavailableReason)
+        #endif
+    }
+
+    public func stopScan() {
+        #if canImport(JWBle)
+        stopScanSDK()
+        #else
+        if case .scanning = phase {
+            phase = .idle
+        }
+        #endif
+    }
+
+    // MARK: - Connect
+
+    public func connect(_ entry: Discovered) {
+        #if canImport(JWBle)
+        connectSDK(entry)
+        #else
+        phase = .failed(reason: Self.sdkUnavailableReason)
+        #endif
+    }
+
+    // MARK: - Auto-Reconnect
+
+    public func attemptAutoReconnect() {
+        #if canImport(JWBle)
+        attemptAutoReconnectSDK()
+        #endif
+    }
+
+    // MARK: - Disconnect
+
+    public func disconnect() {
+        #if canImport(JWBle)
+        disconnectSDK()
+        #else
+        phase = .idle
+        #endif
+    }
+}
+
+#if canImport(JWBle)
+import JWBle
+
+extension JWBleSession {
+
+    fileprivate func installCallbacksIfNeededSDK() {
         guard !callbacksInstalled else { return }
         callbacksInstalled = true
 
@@ -87,23 +161,12 @@ public final class JWBleSession: ObservableObject {
         DebugLog.shared.info("jwble: SDK initialized + connectStateChangeCallBack installed")
     }
 
-    private func handleConnectStatusChange(_ status: JWBleDeviceConnectStatus) {
+    fileprivate func handleConnectStatusChange(_ status: JWBleDeviceConnectStatus) {
         switch status {
         case .connect:
             DebugLog.shared.info("jwble: status=Connect (BLE pipe open, awaiting bond)")
 
         case .bondSuccess:
-            // Operator report 2026-05-09: W300 firmware bonds + opens
-            // every audio characteristic (KEY_SETTING_Audio_RSP visible
-            // on FF03) but never emits .syncSuccess. Without that
-            // signal our phase stayed at .connecting forever, the
-            // Devices tab read "Connecting…", and JWBleAdapterWired's
-            // poll loop's `isDeviceConnected()` was happy but the UI
-            // looked broken. Promote bond → ready immediately;
-            // .syncSuccess (when it does fire) just refreshes the
-            // device name. JieLi's docs say syncSuccess is the
-            // strict success criterion, but practical observation
-            // with W300 is that bond is sufficient for sensor reads.
             let bondName = JWBleManager.shareInstance().connectionModel.deviceName
             DebugLog.shared.success("jwble: status=BondSuccess — promoting to .ready (\(bondName))")
             phase = .ready(name: bondName)
@@ -120,10 +183,6 @@ public final class JWBleSession: ObservableObject {
         case .syncSuccess:
             let name = JWBleManager.shareInstance().connectionModel.deviceName
             DebugLog.shared.success("jwble: status=SyncSuccess — device ready (\(name))")
-            // Idempotent: bondSuccess already promoted us to .ready
-            // for W300 firmware that doesn't emit syncSuccess; this
-            // path covers devices that DO emit it (and refreshes the
-            // device name from the post-sync read).
             phase = .ready(name: name)
             emitGlassesStatus("ready", extra: ["device_name": .string(name)])
 
@@ -149,10 +208,6 @@ public final class JWBleSession: ObservableObject {
         case .timeOutDisconnect:
             DebugLog.shared.warning("jwble: TimeOutDisconnect — BLE comm timed out")
             phase = .failed(reason: "Communication timeout — glasses disconnected")
-            // Phase-1.5: tell the brain instantly. Without this emit
-            // the brain only learned via the 30s heartbeat sweep
-            // derating the row to stale; iOS UI was instant but the
-            // brain — and therefore the web dashboard — lagged.
             emitGlassesStatus("disconnected", extra: ["reason": .string("timeout_disconnect")])
 
         case .deviceStatusChanges:
@@ -172,12 +227,6 @@ public final class JWBleSession: ObservableObject {
 
         case .disConnect:
             DebugLog.shared.warning("jwble: status=DisConnect")
-            // Phase-1.5: only report a brain-side disconnect when we
-            // were actually mid-link. A `.disConnect` callback in
-            // the `.idle` / `.scanning` phase is BLE noise (e.g.
-            // user backgrounded the scan modal); emitting then
-            // would falsely tell the brain we lost something we
-            // never had.
             if case .ready = phase {
                 phase = .failed(reason: "Glasses disconnected")
                 emitGlassesStatus(
@@ -200,9 +249,7 @@ public final class JWBleSession: ObservableObject {
         }
     }
 
-    // MARK: - Scan
-
-    public func startScanOnly() {
+    fileprivate func startScanOnlySDK() {
         discovered = []
         phase = .scanning
         DebugLog.shared.info("jwble: starting scan")
@@ -215,8 +262,7 @@ public final class JWBleSession: ObservableObject {
         }
     }
 
-    private func handleDiscoveredDevice(_ model: JWBleDeviceModel) {
-        // Vendor filter: skip rssi == 127 (invalid) and nil/empty names
+    fileprivate func handleDiscoveredDevice(_ model: JWBleDeviceModel) {
         guard model.rssi.intValue != 127 else { return }
         let name = model.deviceName
         guard !name.isEmpty else { return }
@@ -227,21 +273,19 @@ public final class JWBleSession: ObservableObject {
             name: name,
             macAddress: model.macAddress.isEmpty ? nil : model.macAddress,
             rssi: model.rssi.intValue,
-            model: model
+            sdkModel: model
         )
 
-        // Dedupe by peripheral UUID — update RSSI if already present
         if let idx = discovered.firstIndex(where: { $0.id == uuid }) {
             discovered[idx] = entry
         } else {
             discovered.append(entry)
         }
 
-        // Sort by RSSI descending (strongest first)
         discovered.sort { $0.rssi > $1.rssi }
     }
 
-    public func stopScan() {
+    fileprivate func stopScanSDK() {
         JWBleAction.jwStopScanDevice()
         if case .scanning = phase {
             phase = .idle
@@ -249,28 +293,22 @@ public final class JWBleSession: ObservableObject {
         DebugLog.shared.info("jwble: scan stopped")
     }
 
-    // MARK: - Connect
-
-    public func connect(_ entry: Discovered) {
+    fileprivate func connectSDK(_ entry: Discovered) {
         JWBleAction.jwStopScanDevice()
         phase = .connecting(name: entry.name)
         DebugLog.shared.info("jwble: connecting to \(entry.name) (uuid=\(entry.id))")
 
-        // Persist for auto-reconnect on cold launch
         UserDefaults.standard.set(entry.id, forKey: Self.lastPeripheralKey)
 
-        JWBleAction.jwConnectDevice(entry.model)
+        JWBleAction.jwConnectDevice(entry.sdkModel)
     }
 
-    // MARK: - Auto-Reconnect
-
-    public func attemptAutoReconnect() {
+    fileprivate func attemptAutoReconnectSDK() {
         guard let savedUUID = UserDefaults.standard.string(forKey: Self.lastPeripheralKey) else {
             DebugLog.shared.info("jwble: no saved peripheral UUID — skipping auto-reconnect")
             return
         }
 
-        // Already connected or connecting — skip
         if case .ready = phase { return }
         if case .connecting = phase { return }
 
@@ -294,14 +332,13 @@ public final class JWBleSession: ObservableObject {
                         name: name,
                         macAddress: deviceModel.macAddress.isEmpty ? nil : deviceModel.macAddress,
                         rssi: deviceModel.rssi.intValue,
-                        model: deviceModel
+                        sdkModel: deviceModel
                     )
                     self.connect(entry)
                 }
             }
         }
 
-        // Timeout: stop scanning after 15s if not found
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             guard let self = self, case .scanning = self.phase else { return }
@@ -310,11 +347,10 @@ public final class JWBleSession: ObservableObject {
         }
     }
 
-    // MARK: - Disconnect
-
-    public func disconnect() {
+    fileprivate func disconnectSDK() {
         JWBleAction.jwDisConnect()
         phase = .idle
         DebugLog.shared.info("jwble: disconnect called")
     }
 }
+#endif

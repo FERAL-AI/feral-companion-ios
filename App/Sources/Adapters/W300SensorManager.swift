@@ -20,6 +20,8 @@
 //    * SpO2: never call `jwTestOxygen(.end)`; SDK crashes.
 
 import Foundation
+
+#if canImport(JWBle)
 import JWBle
 
 // MARK: - Sensor Types
@@ -357,3 +359,4 @@ struct StepsReading {
         }
     }
 }
+#endif

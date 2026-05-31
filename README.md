@@ -46,12 +46,45 @@ The brain is device-agnostic. Adapters are device-specific. The app shell is bot
 ```bash
 brew install xcodegen
 ./scripts/bootstrap.sh   # always run after switching branches
+./scripts/check-vendor.sh  # optional: see which SDKs are present
 open FeralCompanion.xcodeproj
 ```
 
 `FeralCompanion.xcodeproj` is **gitignored** and regenerated from `project.yml`. If Xcode reports *"Build input files cannot be found"* for Swift files that are not on disk, your local `.xcodeproj` is stale — run `./scripts/bootstrap.sh` and rebuild.
 
 To build for a real iPhone you need an Apple Developer team configured in Xcode signing.
+
+## Vendor SDKs
+
+The `Vendor/` directory holds third-party binaries the app links against.
+
+### Bundled (open source — committed in-repo)
+
+| Component | License | Purpose |
+| --- | --- | --- |
+| `Vendor/CocoaLumberjack.framework` | BSD | Logging dependency of the JWBle glasses SDK (linked when JWBle is present) |
+| `Vendor/FMDB/` | MIT | SQLite helpers; `FMDatabaseAdditions` compiled when JWBle is present |
+
+These are small, redistributable, and committed so operators with JWBle SDK access have the companion deps ready. A fresh clone **without** JWBle does not link them.
+
+### Proprietary (optional — not redistributable)
+
+The following SDKs are **not** committed. There are no written redistribution rights for them. The app **builds and runs without them**; corresponding hardware features show as *unavailable* in the Devices tab.
+
+| SDK | Hardware | Drop path |
+| --- | --- | --- |
+| `JWBle.framework` (+ Realtek RTK*) | Theora W300 health glasses | `Vendor/JWBle.framework`, `Vendor/RTK*.framework` |
+| `QCSDK.framework` | W610 open glasses | `Vendor/QCSDK.framework` |
+| `VeepooBleSDK.framework` | Veepoo wristband | `Vendor/VeepooBleSDK.framework` |
+
+To enable hardware features, **contact Theora** for SDK access, copy the `.framework` bundles into `Vendor/`, then regenerate the Xcode project:
+
+```bash
+./scripts/check-vendor.sh   # verify bundles are detected
+./scripts/bootstrap.sh      # links frameworks when present
+```
+
+`scripts/generate-vendor-yml.sh` (called by bootstrap) adds proprietary framework links to the build **only when the bundles exist on disk**. Swift code uses `#if canImport(JWBle)` (and similar) so the app target compiles cleanly either way.
 
 ## SDK sync
 
