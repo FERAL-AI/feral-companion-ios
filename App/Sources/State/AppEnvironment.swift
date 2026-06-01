@@ -88,6 +88,7 @@ public final class AppEnvironment: ObservableObject {
         // A BT row never reads `.active` unless both signals agree.
         conn.deviceStore.bindBluetoothMonitor(monitor)
         conn.deviceStore.bindJWBleSession(JWBleSession.shared)
+        conn.deviceStore.bindVeepooSession(VeepooSession.shared)
         // Bind HealthStore to DeviceStore so adapters can write
         // readings into the local Vitals UI directly. Note: we do NOT
         // auto-activate HealthKit on first launch — the user taps

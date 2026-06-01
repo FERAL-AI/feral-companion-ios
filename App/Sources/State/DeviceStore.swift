@@ -76,6 +76,10 @@ public final class DeviceStore: ObservableObject {
     /// defaults to `.idle` since no link exists at construction.
     public private(set) var jwBlePhase: JWBleSession.Phase = .idle
 
+    /// Last-known `VeepooSession.phase`. Set via the bound session;
+    /// defaults to `.idle` since no link exists at construction.
+    public private(set) var veepooPhase: VeepooSession.Phase = .idle
+
     /// Lazily-initialized adapter instances keyed by capability.
     private var adapterByCapability: [String: VendorAdapter] = [:]
 
@@ -94,13 +98,15 @@ public final class DeviceStore: ObservableObject {
     private let defaults: UserDefaults
     private static let activeCapabilitiesKey = "feral.activeCapabilities"
 
-    /// Capability ids that live behind the JWBle BLE link. Phase 1
-    /// only ships `jw_health_glasses`; future Theora-platform caps
-    /// (camera, mic, display) plug into the same derivation.
+    /// Capability ids that live behind the JWBle BLE link.
     private static let jwBleCapabilities: Set<String> = ["jw_health_glasses"]
+
+    /// Capability ids that live behind the Veepoo BLE link.
+    private static let veepooBleCapabilities: Set<String> = ["veepoo_wristband"]
 
     private var bluetoothMonitor: BluetoothSystemMonitor?
     private var jwBleSession: JWBleSession?
+    private var veepooSession: VeepooSession?
     private var cancellables: Set<AnyCancellable> = []
 
     public init(defaults: UserDefaults = .standard) {
@@ -147,6 +153,19 @@ public final class DeviceStore: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] newPhase in
                 self?._applyJWBlePhase(newPhase)
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Subscribe to the Veepoo session phase. Must be called after the
+    /// session is set up by `BLEScanView` / the SDK callbacks; triggers
+    /// an immediate derivation pass with the current phase.
+    public func bindVeepooSession(_ session: VeepooSession) {
+        self.veepooSession = session
+        session.$phase
+            .receive(on: RunLoop.main)
+            .sink { [weak self] newPhase in
+                self?._applyVeepooPhase(newPhase)
             }
             .store(in: &cancellables)
     }
@@ -216,7 +235,9 @@ public final class DeviceStore: ObservableObject {
                 displayName: "Veepoo Wristband",
                 summary: "First-party FERAL wristband. HR, SpO2, body temp, ECG over BLE.",
                 category: .bluetooth,
-                status: .unsupported(reason: "Vendor frameworks not yet linked into this build")
+                status: VeepooSession.isSDKAvailable
+                    ? .available
+                    : .unsupported(reason: VeepooSession.sdkUnavailableReason)
             ),
             Entry(
                 id: "w610_glasses",
@@ -289,6 +310,11 @@ public final class DeviceStore: ObservableObject {
             jw.setHealthStore(store)
         }
         #endif
+        #if canImport(VeepooBleSDK)
+        if let vp = adapter as? VeepooAdapterWired, let store = healthStore {
+            vp.setHealthStore(store)
+        }
+        #endif
     }
 
     /// Drop user intent for the capability and remove its adapter. For
@@ -301,8 +327,13 @@ public final class DeviceStore: ObservableObject {
         activeAdapters.removeAll { $0.capability == capability }
 
         if isBluetoothCapability(capability) {
-            jwBleSession?.disconnect()
-            // No JWBle phase to consult yet (we may have called
+            if Self.jwBleCapabilities.contains(capability) {
+                jwBleSession?.disconnect()
+            }
+            if Self.veepooBleCapabilities.contains(capability) {
+                veepooSession?.disconnect()
+            }
+            // No BLE phase to consult yet (we may have called
             // disconnect synchronously); fall back to .available so
             // the row offers Connect again.
             updateStatus(capability, to: .available)
@@ -325,7 +356,11 @@ public final class DeviceStore: ObservableObject {
             return JWBleAdapter()
             #endif
         case "veepoo_wristband":
+            #if canImport(VeepooBleSDK)
+            return VeepooAdapterWired()
+            #else
             return VeepooAdapter()
+            #endif
         case "w610_glasses":
             return QCSDKAdapter()
         default:
@@ -343,6 +378,7 @@ public final class DeviceStore: ObservableObject {
 
     private func isBluetoothCapability(_ capability: String) -> Bool {
         Self.jwBleCapabilities.contains(capability)
+            || Self.veepooBleCapabilities.contains(capability)
     }
 
     /// Recompute the status for every Bluetooth row that the user has
@@ -359,8 +395,12 @@ public final class DeviceStore: ObservableObject {
 
     private func _recomputeBluetoothStatus(for capability: String) {
         guard isBluetoothCapability(capability) else { return }
+        if let entry = entries.first(where: { $0.id == capability }),
+           case .unsupported = entry.status {
+            return
+        }
         // System BT off / unknown / resetting / unauthorized always
-        // wins — even if JWBleSession.phase still reads `.ready`
+        // wins — even if a BLE session phase still reads `.ready`
         // because the link hasn't dropped yet, we know the radio is
         // not in a state where a heartbeat can succeed. Phase-1.5
         // strict cold-launch contract: the row only reads `.active`
@@ -391,22 +431,48 @@ public final class DeviceStore: ObservableObject {
         }
 
         let userWantsActive = intent.contains(capability)
-        switch jwBlePhase {
+        let phase = bleSessionPhase(for: capability)
+        switch phase {
         case .ready:
             updateStatus(capability, to: .active)
         case .connecting:
             updateStatus(capability, to: .connecting)
         case .failed(let reason):
-            // Surface the JWBle SDK's own reason text — the user gets
-            // "Bond failed — device may be paired to another phone"
-            // instead of a generic failure dot.
             updateStatus(capability, to: .failed(reason: reason))
         case .scanning, .idle:
-            // No active link. If the user wanted this row active, show
-            // `.available` so the Connect button re-appears (truthful:
-            // we are not connected). If they didn't, also `.available`.
-            _ = userWantsActive  // intent affects deactivate semantics, not status here
+            _ = userWantsActive
             updateStatus(capability, to: .available)
+        }
+    }
+
+    private enum BleDerivedPhase: Equatable {
+        case idle
+        case scanning
+        case connecting
+        case ready
+        case failed(reason: String)
+    }
+
+    private func bleSessionPhase(for capability: String) -> BleDerivedPhase {
+        switch capability {
+        case let cap where Self.jwBleCapabilities.contains(cap):
+            switch jwBlePhase {
+            case .idle: return .idle
+            case .scanning: return .scanning
+            case .connecting: return .connecting
+            case .ready: return .ready
+            case .failed(let reason): return .failed(reason: reason)
+            }
+        case let cap where Self.veepooBleCapabilities.contains(cap):
+            switch veepooPhase {
+            case .idle: return .idle
+            case .scanning: return .scanning
+            case .connecting: return .connecting
+            case .ready: return .ready
+            case .failed(let reason): return .failed(reason: reason)
+            }
+        default:
+            return .idle
         }
     }
 
@@ -428,6 +494,13 @@ public final class DeviceStore: ObservableObject {
     /// subscribes via `bindJWBleSession`.
     public func _applyJWBlePhase(_ phase: JWBleSession.Phase) {
         jwBlePhase = phase
+        _recomputeBluetoothStatus()
+    }
+
+    /// Apply a Veepoo session phase. Public for tests; production code
+    /// subscribes via `bindVeepooSession`.
+    public func _applyVeepooPhase(_ phase: VeepooSession.Phase) {
+        veepooPhase = phase
         _recomputeBluetoothStatus()
     }
 }

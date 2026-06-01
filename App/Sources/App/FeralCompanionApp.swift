@@ -82,6 +82,7 @@ struct FeralCompanionApp: App {
                 // returned.
                 await environment.connection.disconnect()
                 JWBleSession.shared.disconnect()
+                VeepooSession.shared.disconnect()
                 if bgTaskID != .invalid {
                     app.endBackgroundTask(bgTaskID)
                     bgTaskID = .invalid
@@ -109,6 +110,7 @@ struct FeralCompanionApp: App {
                 // previously paired a JWBle peripheral; the session
                 // itself bails if the persisted UUID is missing.
                 JWBleSession.shared.attemptAutoReconnect()
+                VeepooSession.shared.attemptAutoReconnect()
                 // Phase 9 (audit-r10 overhaul) — after the WS comes
                 // back, pull the brain's authoritative primary-
                 // session transcript and merge any turns we missed

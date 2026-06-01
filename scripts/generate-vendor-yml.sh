@@ -27,6 +27,14 @@ add_framework RTKAudioConnectSDK
 add_framework RTKLEFoundation
 add_framework RTKOTASDK
 
+add_framework VeepooBleSDK
+add_framework ABParTool
+add_framework DFUnits
+add_framework GRDFUSDK
+add_framework JLDialUnit
+add_framework JL_BLEKit
+add_framework ZipZap
+
 if [[ -d "$VENDOR/JWBle.framework" ]]; then
   app_sources+=("      - path: Vendor/FMDB/FMDatabaseAdditions.m")
   app_sources+=("      - path: Vendor/FMDB/FMDatabaseAdditions.h")
