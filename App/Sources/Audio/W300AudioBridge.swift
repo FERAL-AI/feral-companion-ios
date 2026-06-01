@@ -126,11 +126,39 @@ public final class W300AudioBridge: ObservableObject {
         try session.setPreferredSampleRate(24000)
         try session.setPreferredIOBufferDuration(0.01)
         try session.setActive(true, options: [])
+        // `.allowBluetooth` only makes the W300's classic-BT HFP mic
+        // AVAILABLE — iOS otherwise keeps the built-in mic selected, so
+        // voice IN (and, since HFP is bidirectional, voice OUT) stayed on
+        // the phone even with the glasses connected. Explicitly prefer the
+        // Bluetooth input so the route follows the headset.
+        Self.preferBluetoothInput(on: session)
         switch direction {
         case .capture: captureActive = true
         case .playback: playbackActive = true
         }
         refreshRoute()
+    }
+
+    /// Select a connected Bluetooth headset (W300 / AirPods / any HFP or
+    /// LE-audio peripheral) as the session's preferred input when one is
+    /// present. HFP is a bidirectional profile, so preferring the BT mic
+    /// also pulls playback onto the headset. When no BT input is available
+    /// the preference is cleared so iOS falls back to its default (built-in
+    /// mic / speaker) cleanly.
+    private static func preferBluetoothInput(on session: AVAudioSession) {
+        let btInputTypes: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE]
+        let available = session.availableInputs ?? []
+        do {
+            if let bt = available.first(where: { btInputTypes.contains($0.portType) }) {
+                try session.setPreferredInput(bt)
+            } else {
+                try session.setPreferredInput(nil)
+            }
+        } catch {
+            #if DEBUG
+            print("[W300AudioBridge] setPreferredInput failed: \(error)")
+            #endif
+        }
     }
 
     /// Mark a direction as inactive. When both directions are off
@@ -192,6 +220,13 @@ public final class W300AudioBridge: ObservableObject {
            let reason = AVAudioSession.RouteChangeReason(rawValue: raw)
         {
             lastRouteChangeReason = reason
+            // W300 connected mid-conversation: re-assert it as the preferred
+            // input so voice follows the glasses without the user toggling
+            // voice off/on. Gated on `.newDeviceAvailable` so we don't loop
+            // on our own setPreferredInput-induced route changes.
+            if reason == .newDeviceAvailable, captureActive || playbackActive {
+                Self.preferBluetoothInput(on: AVAudioSession.sharedInstance())
+            }
         }
         refreshRoute()
     }
