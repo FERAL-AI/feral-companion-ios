@@ -99,8 +99,11 @@ struct FeralCompanionApp: App {
             Task { @MainActor in
                 if didKickReconnectThisActivation { return }
                 didKickReconnectThisActivation = true
-                if case .paired = environment.connection.status {
+                switch environment.connection.status {
+                case .paired, .reconnecting:
                     await environment.connection.connect()
+                default:
+                    break
                 }
                 // Only attempt auto-reconnect when the user has
                 // previously paired a JWBle peripheral; the session

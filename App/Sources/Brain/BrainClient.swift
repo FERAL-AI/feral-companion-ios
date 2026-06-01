@@ -189,6 +189,13 @@ public final class BrainClient: ObservableObject {
         return skills
     }
 
+    /// Seconds to wait for the brain's first ``node_ack`` after the
+    /// WebSocket opens. Without a bound, ``state`` can sit in
+    /// ``.connecting`` forever when the brain accepts the socket but
+    /// never acks — which also pins ``ConnectionStore.connectInFlight``
+    /// and blocks every foreground reconnect attempt.
+    private static let nodeAckTimeoutSeconds: TimeInterval = 3.0
+
     /// Open the WebSocket and run `node_register`. The provided
     /// `adapters` are registered before connect so their capabilities
     /// land in the brain's first-ack.
@@ -238,12 +245,32 @@ public final class BrainClient: ObservableObject {
             JWBleSession.shared.bind(brainNode: node)
             // Connection state flips to .connected when we observe
             // the first node_ack frame in handleInbound.
+            if !(await waitForNodeAck(timeoutSeconds: Self.nodeAckTimeoutSeconds)) {
+                let message =
+                    "Couldn't reach the brain (no node_ack within "
+                    + "\(Int(Self.nodeAckTimeoutSeconds))s)."
+                DebugLog.shared.error("connect: \(message) — tearing down socket")
+                await disconnect()
+                state = .failed(message: message)
+            }
         } catch {
             state = .failed(message: error.localizedDescription)
             self.node = nil
             inboundTask?.cancel()
             inboundTask = nil
         }
+    }
+
+    /// Poll ``state`` until ``node_ack`` promotes us to ``.connected``,
+    /// or the deadline passes / ``.failed`` is observed.
+    private func waitForNodeAck(timeoutSeconds: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if state.isConnected { return true }
+            if case .failed = state { return false }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return state.isConnected
     }
 
     public func disconnect() async {

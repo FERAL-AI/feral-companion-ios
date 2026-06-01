@@ -252,6 +252,7 @@ final class FeralCompanionTests: XCTestCase {
         // a real reachability probe + WS dial, which the test would
         // fail by either taking >>1s or by leaving status in .error.
         conn.brainClient._setStateForTesting(.connecting(brainURL: url))
+        conn._markConnectAttemptInProgressForTesting()
 
         let started = Date()
         await conn.connect()

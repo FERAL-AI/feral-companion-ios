@@ -42,6 +42,17 @@ public final class ConnectionStore: ObservableObject {
     /// the second connect tearing down the first. This flag closes
     /// the race at the ConnectionStore boundary.
     private var connectInFlight: Bool = false
+    /// When the current ``connect()`` attempt started. Used to detect
+    /// a stale ``.connecting`` brainClient that never received
+    /// ``node_ack`` so foreground reconnect can tear down and retry.
+    private var lastConnectStartedAt: Date?
+    /// Backoff gate after a WS dial / node_ack failure so rapid
+    /// ``scenePhase: .active`` transitions don't hammer the brain.
+    private var connectRetryAfter: Date?
+    /// How long a ``.connecting`` brainClient is treated as an active
+    /// dial before ``connect()`` force-disconnects and retries.
+    private static let connectStaleAfterSeconds: TimeInterval = 4.0
+    private static let connectRetryBackoffSeconds: TimeInterval = 2.0
 
     public init(defaults: UserDefaults = .standard,
                 brainClient: BrainClient? = nil,
@@ -103,7 +114,15 @@ public final class ConnectionStore: ObservableObject {
         case .reconnecting:
             self.status = .reconnecting
         case .failed(let m):
-            self.status = .error(message: m)
+            DebugLog.shared.error("brain WS: \(m)")
+            // Stay reconnectable when pairing credentials survive —
+            // mapping to `.error` would stop ``scenePhase: .active``
+            // from calling ``connect()`` again.
+            if self.brainURL != nil {
+                self.status = .reconnecting
+            } else {
+                self.status = .error(message: m)
+            }
         case .disconnected:
             // Don't downgrade .paired (stored URL+bearer) to .unpaired
             // just because we're not actively connected — pair info
@@ -209,6 +228,13 @@ public final class ConnectionStore: ObservableObject {
             status = .error(message: "No paired brain.")
             return
         }
+        if let retryAfter = connectRetryAfter, Date() < retryAfter {
+            DebugLog.shared.info(
+                "connect: backing off until retry window "
+                + "(\(Int(retryAfter.timeIntervalSinceNow))s)"
+            )
+            return
+        }
         // Re-entry gate FIRST — closes the window the state-based
         // guard can't see (see ``connectInFlight`` docstring).
         guard !connectInFlight else {
@@ -216,14 +242,27 @@ public final class ConnectionStore: ObservableObject {
             return
         }
         switch brainClient.state {
-        case .connecting, .connected:
-            DebugLog.shared.info("connect: brainClient already \(brainClient.state) — skipping duplicate dial")
+        case .connected:
+            DebugLog.shared.info("connect: brainClient already connected — skipping duplicate dial")
             return
+        case .connecting:
+            if let since = lastConnectStartedAt,
+               Date().timeIntervalSince(since) < Self.connectStaleAfterSeconds {
+                DebugLog.shared.info("connect: brainClient already connecting — skipping duplicate dial")
+                return
+            }
+            DebugLog.shared.warning("connect: stale .connecting — tearing down socket before retry")
+            await brainClient.disconnect()
+            lastConnectStartedAt = nil
         case .disconnected, .reconnecting, .failed:
             break
         }
         connectInFlight = true
-        defer { connectInFlight = false }
+        defer {
+            connectInFlight = false
+            lastConnectStartedAt = nil
+        }
+        lastConnectStartedAt = Date()
         guard let wsURL = PairingClient.websocketURL(from: brainURL) else {
             DebugLog.shared.error("connect: invalid brain URL \(brainURL.absoluteString)")
             status = .error(message: "Invalid brain URL.")
@@ -234,6 +273,7 @@ public final class ConnectionStore: ObservableObject {
         let reachable = await testBrainReachability(url: brainURL)
         if !reachable {
             status = .error(message: "Brain unreachable at \(brainURL.absoluteString). On the Mac, restart with FERAL_HOST=0.0.0.0 and verify the LAN IP from your phone.")
+            connectRetryAfter = Date().addingTimeInterval(Self.connectRetryBackoffSeconds)
             return
         }
         DebugLog.shared.info("connect: opening WS \(wsURL.absoluteString) with \(deviceStore.activeAdapters.count) adapter(s)")
@@ -242,7 +282,23 @@ public final class ConnectionStore: ObservableObject {
         // Status flips via the brainClient.$state subscription set up
         // in init — DO NOT eagerly set .connected here. The subscription
         // reads node_ack and is the single source of truth.
-        DebugLog.shared.info("connect: handed off to BrainClient; awaiting node_ack")
+        switch brainClient.state {
+        case .connected:
+            connectRetryAfter = nil
+            DebugLog.shared.success("connect: node_ack received — online")
+        case .failed(let message):
+            connectRetryAfter = Date().addingTimeInterval(Self.connectRetryBackoffSeconds)
+            DebugLog.shared.error("connect: failed — \(message); retry in \(Int(Self.connectRetryBackoffSeconds))s")
+        default:
+            DebugLog.shared.info("connect: handed off to BrainClient; awaiting node_ack")
+        }
+    }
+
+    /// Test-only seam — marks a recent in-flight connect attempt so
+    /// ``connect()`` idempotency tests can simulate a concurrent dial
+    /// without opening a real WebSocket.
+    func _markConnectAttemptInProgressForTesting() {
+        lastConnectStartedAt = Date()
     }
 
     public func disconnect() async {
