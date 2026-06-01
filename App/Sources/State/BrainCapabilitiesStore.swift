@@ -78,7 +78,11 @@ public final class BrainCapabilitiesStore: ObservableObject {
             return
         }
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            // /api/capabilities is on the brain's phone-bearer GET allowlist —
+            // an unauthenticated LAN fetch is rejected with 401. Attach the
+            // paired phone bearer.
+            let req = BrainHTTP.authorized(url, bearer: brainClient?.phoneBearer, method: .get)
+            let (data, response) = try await URLSession.shared.data(for: req)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 lastRefreshError = "Brain returned status \((response as? HTTPURLResponse)?.statusCode ?? -1)"
                 return

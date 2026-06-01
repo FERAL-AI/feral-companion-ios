@@ -117,10 +117,12 @@ struct MacPermissionsStepView: View {
             return
         }
         guard let url = URL(string: "/api/system/permissions", relativeTo: base) else { return }
+        let bearer = env.brain.phoneBearer
 
         Task {
             do {
-                let (data, response) = try await URLSession.shared.data(from: url)
+                let req = BrainHTTP.authorized(url, bearer: bearer, method: .get)
+                let (data, response) = try await URLSession.shared.data(for: req)
                 guard let http = response as? HTTPURLResponse,
                       http.statusCode == 200 else {
                     isLoading = false

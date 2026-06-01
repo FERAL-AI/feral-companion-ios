@@ -662,7 +662,9 @@ public final class BrainClient: ObservableObject {
         }
 
         do {
-            let (data, response) = try await URLSession.shared.data(from: endpoint)
+            // /api/sessions/primary/transcript is phone-bearer gated — attach it.
+            let req = BrainHTTP.authorized(endpoint, bearer: phoneBearer, method: .get)
+            let (data, response) = try await URLSession.shared.data(for: req)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
             guard let messages = json["messages"] as? [[String: Any]] else { return }
