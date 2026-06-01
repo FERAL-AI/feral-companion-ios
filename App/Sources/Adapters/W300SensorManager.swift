@@ -208,10 +208,13 @@ struct StepsReading {
         guard !isBusy(.spo2) else { completion(.failure(.deviceBusy)); return }
 
         setBusy(.spo2, busy: true)
+        var hasReturned = false
 
         JWBleAction.jwTestOxygen(.start) { [weak self] status, resultType, oxygenModel in
-            guard let self = self else { return }
+            guard let self = self, !hasReturned else { return }
             // SDK QUIRK: Status field is unreliable. Trust resultType + payload.
+            // The demo streams multiple Start callbacks with rising mCurValue;
+            // complete once on the first valid reading (hasReturned guard).
             if (resultType == .start || resultType == .available),
                let model = oxygenModel,
                model.mCurValue > 0 {
@@ -222,11 +225,13 @@ struct StepsReading {
                     timestamp: Date()
                 )
                 if reading.isValid {
+                    hasReturned = true
                     self.spo2Cache = reading
                     self.setBusy(.spo2, busy: false)
                     completion(.success(reading))
                 }
             } else if status == .busy {
+                hasReturned = true
                 self.setBusy(.spo2, busy: false)
                 completion(.failure(.deviceBusy))
             }
@@ -234,8 +239,9 @@ struct StepsReading {
 
         // Don't call jwTestOxygen(.end) - SDK crashes when stopping SpO2.
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
-            guard let self = self else { return }
+            guard let self = self, !hasReturned else { return }
             if self.isBusy(.spo2) {
+                hasReturned = true
                 self.setBusy(.spo2, busy: false)
                 completion(.failure(.timeout))
             }

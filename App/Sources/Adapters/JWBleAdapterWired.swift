@@ -31,7 +31,7 @@ public final class JWBleAdapterWired: VendorAdapter {
     private let pollInterval: TimeInterval
     private var phaseObserver: AnyCancellable?
 
-    public init(pollInterval: TimeInterval = 30, healthStore: HealthStore? = nil) {
+    public init(pollInterval: TimeInterval = 10, healthStore: HealthStore? = nil) {
         self.pollInterval = pollInterval
         self.healthStore = healthStore
     }
@@ -71,29 +71,27 @@ public final class JWBleAdapterWired: VendorAdapter {
         }
         self.attachedNode = node
 
-        // Subscribe to JWBleSession phase transitions so the FIRST
-        // sensor poll fires the moment the W300 reaches `.ready`
-        // (post-bond). Operator report 2026-05-09 round 4: previously
-        // we kicked the first poll on attach() which sent
-        // jwTestHRAction during bond and the W300 firmware dropped us.
-        // Now the phase-driven kick is firmware-safe AND reactive
-        // (no 30s wait for the next scheduled tick).
+        // Subscribe to JWBleSession phase transitions so vitals polling
+        // starts the moment the W300 reaches `.ready` (post-bond) and
+        // stops on disconnect. Operator report 2026-05-09 round 4:
+        // never kick jwTestHRAction during bond — only after `.ready`.
+        // Combine's sink does not replay the current value, so we also
+        // inspect phase once after subscribing (glasses may already be
+        // bonded when the brain connects).
         phaseObserver?.cancel()
         phaseObserver = await MainActor.run {
             JWBleSession.shared.$phase
                 .removeDuplicates()
                 .sink { [weak self] newPhase in
-                    if case .ready = newPhase {
-                        Task { [weak self] in await self?.pollOnce() }
-                    }
+                    Task { [weak self] in await self?.handlePhaseChange(newPhase) }
                 }
         }
-        startPollingIfNeeded()
+        let currentPhase = await MainActor.run { JWBleSession.shared.phase }
+        await handlePhaseChange(currentPhase)
     }
 
     public func detach() async {
-        pollTimer?.invalidate()
-        pollTimer = nil
+        await stopPolling()
         phaseObserver?.cancel()
         phaseObserver = nil
         attachedNode = nil
@@ -187,8 +185,13 @@ public final class JWBleAdapterWired: VendorAdapter {
                         let sampleAt = Date()
                         try? await node.emit(eventType: "heart_rate", data: [
                             "bpm": .int(reading.bpm),
+                            // Brain accepts flat ``value`` as a fallback
+                            // (_handle_biometric_device_event).
+                            "value": .int(reading.bpm),
+                            "unit": .string("bpm"),
                             "is_wearing": .bool(reading.isWearing),
                             "source": .string("jw_health_glasses"),
+                            "heart_rate_source": .string("jw_health_glasses"),
                             "heart_rate_sample_ts": .double(sampleAt.timeIntervalSince1970),
                         ])
                         // Audit-r9 B1: also write to local HealthStore
@@ -228,9 +231,13 @@ public final class JWBleAdapterWired: VendorAdapter {
                         let sampleAt = Date()
                         try? await node.emit(eventType: "spo2", data: [
                             "current": .int(r.current),
+                            "spo2": .int(r.current),
+                            "value": .int(r.current),
+                            "unit": .string("%"),
                             "high": .int(r.high),
                             "low": .int(r.low),
                             "source": .string("jw_health_glasses"),
+                            "spo2_source": .string("jw_health_glasses"),
                             "spo2_sample_ts": .double(sampleAt.timeIntervalSince1970),
                         ])
                         // Audit-r9 B1: also write to local HealthStore.
@@ -395,53 +402,52 @@ public final class JWBleAdapterWired: VendorAdapter {
         }
     }
 
-    // MARK: - Polling (background heartbeat / steps)
+    // MARK: - Polling (HR + SpO2 cadence while glasses are .ready)
 
+    private func handlePhaseChange(_ phase: JWBleSession.Phase) async {
+        switch phase {
+        case .ready:
+            await startPollingIfNeeded()
+            await pollOnce()
+        default:
+            await stopPolling()
+        }
+    }
+
+    @MainActor
     private func startPollingIfNeeded() {
         pollTimer?.invalidate()
         pollTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             Task { await self?.pollOnce() }
         }
-        // Operator report 2026-05-09 round 4 (with full Xcode log):
-        // Firing the first poll IMMEDIATELY on attach was the source
-        // of the W300 disconnect-loop. JWBleManager.isConnected
-        // becomes true at the GATT level (after didConnectPeripheral)
-        // BEFORE the W300 firmware finishes bond+sync. Sending
-        // jwTestHRAction during that window makes the firmware drop
-        // the connection ("disconnected to W300 error: (null)" in the
-        // log). pollOnce now waits for `JWBleSession.shared.phase ==
-        // .ready` (which only flips after BondSuccess in our delegate
-        // — the firmware-safe handshake completion). No immediate
-        // first-poll kick — the gate inside pollOnce handles it on
-        // the first scheduled tick once `.ready` arrives.
+    }
+
+    @MainActor
+    private func stopPolling() {
+        pollTimer?.invalidate()
+        pollTimer = nil
+        pollTickCount = 0
     }
 
     private func pollOnce() async {
         guard let node = attachedNode else { return }
-        // Phase gate (see startPollingIfNeeded comment): only poll
-        // sensor commands when JWBleSession is fully .ready —
-        // sending HR test commands during bond confuses the W300
-        // firmware and triggers an immediate disconnect.
+        // Phase gate: only poll when JWBleSession is fully `.ready`
+        // (post-bond). Sending jwTestHRAction during bond makes the
+        // W300 firmware drop the connection.
         let phase = await MainActor.run { JWBleSession.shared.phase }
-        guard case .ready = phase else {
-            return
-        }
-        // isDeviceConnected is the SDK-level connectivity check;
-        // .ready already implies it but keep the belt-and-suspenders.
+        guard case .ready = phase else { return }
         guard W300SensorManager.shared.isDeviceConnected() else { return }
-        // Cadence:
-        //   * HR + steps: every poll (cheap, fast).
-        //   * SpO2: every 4th poll (~2 min) — JieLi's spot test takes
-        //     ~30s on the device and is power-hungry. The Vitals UI
-        //     also lets the user trigger spot reads on demand.
-        //   * Temperature: every 4th poll (~2 min) — same rationale.
-        // Reads happen serially because W300SensorManager rejects
-        // concurrent reads with `.deviceBusy`.
+
         pollTickCount &+= 1
+        // HR + SpO2 every tick (10s default). W300SensorManager serialises
+        // via busy flags; cache serves repeat polls between spot tests.
         await runHeartRate(actionId: nil, node: node)
-        await runSteps(actionId: nil, node: node)
-        if pollTickCount % 4 == 0 {
-            await runSpO2(actionId: nil, node: node)
+        await runSpO2(actionId: nil, node: node)
+        // Steps + temperature are lower priority for the Context tab.
+        if pollTickCount % 3 == 0 {
+            await runSteps(actionId: nil, node: node)
+        }
+        if pollTickCount % 6 == 0 {
             await runTemperature(actionId: nil, node: node)
         }
     }
