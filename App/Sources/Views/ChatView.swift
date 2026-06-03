@@ -386,10 +386,9 @@ private struct ChatBubble: View {
         HStack {
             if message.role == .user { Spacer(minLength: 32) }
             VStack(alignment: alignment, spacing: 2) {
-                Text(message.text)
+                bubbleContent
                     .padding(.horizontal, 14).padding(.vertical, 10)
                     .background(background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .foregroundStyle(foreground)
                     .overlay(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .stroke(borderColor, lineWidth: 0.5)
@@ -399,6 +398,23 @@ private struct ChatBubble: View {
                     .foregroundStyle(FeralTheme.textTertiary)
             }
             if message.role != .user { Spacer(minLength: 32) }
+        }
+    }
+
+    /// User bubbles are short and always plain text on a tinted
+    /// background — running them through the markdown parser would
+    /// turn `**emphasis**` typed by the operator into bold while also
+    /// breaking accidental asterisks. Assistant + system replies get
+    /// the full markdown treatment because that's where the brain
+    /// actually emits headings, lists, and code.
+    @ViewBuilder
+    private var bubbleContent: some View {
+        switch message.role {
+        case .user:
+            Text(message.text)
+                .foregroundStyle(foreground)
+        case .assistant, .system:
+            MarkdownText(raw: message.text, textColor: foreground)
         }
     }
 
