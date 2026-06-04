@@ -161,7 +161,7 @@ extension VeepooSession {
         manager.isLogEnable = true
         manager.isAutoShowPair = true
 
-        manager.VPBleConnectStateChangeBlock = { [weak self] state in
+        manager.vpBleConnectStateChangeBlock = { [weak self] state in
             Task { @MainActor [weak self] in
                 self?.handleConnectStateChange(state)
             }
@@ -171,16 +171,16 @@ extension VeepooSession {
 
     fileprivate func handleConnectStateChange(_ state: VPDeviceConnectState) {
         switch state {
-        case .connecting:
+        case .connectStateConnecting:
             let name = VPBleCentralManage.sharedBleManager()?.peripheralModel.deviceName ?? ""
             if case .connecting = phase { return }
             phase = .connecting(name: name)
             DebugLog.shared.info("veepoo: status=Connecting (\(name))")
 
-        case .connect:
+        case .connectStateConnect:
             DebugLog.shared.info("veepoo: status=Connect (BLE pipe open, awaiting password)")
 
-        case .verifyPasswordSuccess:
+        case .connectStateVerifyPasswordSuccess:
             let name = VPBleCentralManage.sharedBleManager()?.peripheralModel.deviceName ?? ""
             DebugLog.shared.success("veepoo: status=VerifyPasswordSuccess — ready (\(name))")
             phase = .ready(name: name)
@@ -188,12 +188,12 @@ extension VeepooSession {
                 "device_name": .string(name),
             ])
 
-        case .verifyPasswordFailure:
+        case .connectStateVerifyPasswordFailure:
             DebugLog.shared.error("veepoo: status=VerifyPasswordFailure")
             phase = .failed(reason: "Password verification failed — try default PIN 0000")
             emitWristbandStatus("failed", extra: ["reason": .string("verify_password_failure")])
 
-        case .disConnect:
+        case .connectStateDisConnect:
             DebugLog.shared.warning("veepoo: status=DisConnect")
             if case .ready = phase {
                 phase = .failed(reason: "Wristband disconnected")
@@ -203,16 +203,13 @@ extension VeepooSession {
                 emitWristbandStatus("disconnected", extra: ["reason": .string("ble_disconnect_during_handshake")])
             }
 
-        case .timeout:
+        case .connectStateTimeout:
             DebugLog.shared.error("veepoo: status=Timeout")
             phase = .failed(reason: "Connection timed out — move the wristband closer")
             emitWristbandStatus("failed", extra: ["reason": .string("connect_timeout")])
 
-        case .discoverNewUpdateFirm:
-            DebugLog.shared.info("veepoo: DiscoverNewUpdateFirm (ignored)")
-
-        @unknown default:
-            DebugLog.shared.info("veepoo: unknown VPDeviceConnectState rawValue=\(state.rawValue)")
+        default:
+            DebugLog.shared.info("veepoo: VPDeviceConnectState rawValue=\(state.rawValue) (ignored)")
         }
     }
 
@@ -230,11 +227,8 @@ extension VeepooSession {
     }
 
     fileprivate func handleDiscoveredDevice(_ model: VPPeripheralModel) {
-        let name = model.deviceName
-        guard !name.isEmpty else { return }
-
-        let address = model.deviceAddress
-        guard !address.isEmpty else { return }
+        guard let name = model.deviceName, !name.isEmpty else { return }
+        guard let address = model.deviceAddress, !address.isEmpty else { return }
 
         let rssi = model.rssi?.intValue ?? -127
         guard rssi != 127 else { return }
@@ -323,10 +317,10 @@ extension VeepooSession {
 
                 self.handleDiscoveredDevice(model)
 
-                if model.deviceAddress == savedAddress {
+                if let address = model.deviceAddress, address == savedAddress {
                     let entry = Discovered(
-                        id: model.deviceAddress,
-                        name: model.deviceName,
+                        id: address,
+                        name: model.deviceName ?? address,
                         rssi: model.rssi?.intValue ?? -127,
                         sdkModel: model
                     )
