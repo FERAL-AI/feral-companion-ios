@@ -154,7 +154,10 @@ extension VeepooSession {
         guard !callbacksInstalled else { return }
         callbacksInstalled = true
 
-        let manager = VPBleCentralManage.sharedBleManager()
+        guard let manager = VPBleCentralManage.sharedBleManager() else {
+            DebugLog.shared.error("veepoo: sharedBleManager() unavailable — SDK not linked?")
+            return
+        }
         manager.isLogEnable = true
         manager.isAutoShowPair = true
 
@@ -169,7 +172,7 @@ extension VeepooSession {
     fileprivate func handleConnectStateChange(_ state: VPDeviceConnectState) {
         switch state {
         case .connecting:
-            let name = VPBleCentralManage.sharedBleManager().peripheralModel.deviceName
+            let name = VPBleCentralManage.sharedBleManager()?.peripheralModel.deviceName ?? ""
             if case .connecting = phase { return }
             phase = .connecting(name: name)
             DebugLog.shared.info("veepoo: status=Connecting (\(name))")
@@ -178,7 +181,7 @@ extension VeepooSession {
             DebugLog.shared.info("veepoo: status=Connect (BLE pipe open, awaiting password)")
 
         case .verifyPasswordSuccess:
-            let name = VPBleCentralManage.sharedBleManager().peripheralModel.deviceName
+            let name = VPBleCentralManage.sharedBleManager()?.peripheralModel.deviceName ?? ""
             DebugLog.shared.success("veepoo: status=VerifyPasswordSuccess — ready (\(name))")
             phase = .ready(name: name)
             emitWristbandStatus("ready", extra: [
@@ -218,7 +221,7 @@ extension VeepooSession {
         phase = .scanning
         DebugLog.shared.info("veepoo: starting scan")
 
-        VPBleCentralManage.sharedBleManager().veepooSDKStartScanDeviceAndReceiveScanningDevice { [weak self] model in
+        VPBleCentralManage.sharedBleManager()?.veepooSDKStartScanDeviceAndReceiveScanningDevice { [weak self] model in
             guard let model = model else { return }
             Task { @MainActor [weak self] in
                 self?.handleDiscoveredDevice(model)
@@ -253,7 +256,7 @@ extension VeepooSession {
     }
 
     fileprivate func stopScanSDK() {
-        VPBleCentralManage.sharedBleManager().veepooSDKStopScanDevice()
+        VPBleCentralManage.sharedBleManager()?.veepooSDKStopScanDevice()
         if case .scanning = phase {
             phase = .idle
         }
@@ -261,13 +264,13 @@ extension VeepooSession {
     }
 
     fileprivate func connectSDK(_ entry: Discovered) {
-        VPBleCentralManage.sharedBleManager().veepooSDKStopScanDevice()
+        VPBleCentralManage.sharedBleManager()?.veepooSDKStopScanDevice()
         phase = .connecting(name: entry.name)
         DebugLog.shared.info("veepoo: connecting to \(entry.name) (address=\(entry.id))")
 
         UserDefaults.standard.set(entry.id, forKey: Self.lastDeviceKey)
 
-        VPBleCentralManage.sharedBleManager().veepooSDKConnectDevice(entry.sdkModel) { [weak self] connectState in
+        VPBleCentralManage.sharedBleManager()?.veepooSDKConnectDevice(entry.sdkModel) { [weak self] connectState in
             Task { @MainActor [weak self] in
                 self?.handleLegacyConnectBlock(connectState)
             }
@@ -287,7 +290,7 @@ extension VeepooSession {
         case .BleConnectFailed:
             phase = .failed(reason: "Bluetooth connection failed")
         case .BleVerifyPasswordSuccess:
-            let name = VPBleCentralManage.sharedBleManager().peripheralModel.deviceName
+            let name = VPBleCentralManage.sharedBleManager()?.peripheralModel.deviceName ?? ""
             phase = .ready(name: name)
             emitWristbandStatus("ready", extra: ["device_name": .string(name)])
         case .BleVerifyPasswordFailure:
@@ -312,7 +315,7 @@ extension VeepooSession {
         discovered = []
         phase = .scanning
 
-        VPBleCentralManage.sharedBleManager().veepooSDKStartScanDeviceAndReceiveScanningDevice { [weak self] model in
+        VPBleCentralManage.sharedBleManager()?.veepooSDKStartScanDeviceAndReceiveScanningDevice { [weak self] model in
             guard let model = model else { return }
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
@@ -341,7 +344,7 @@ extension VeepooSession {
     }
 
     fileprivate func disconnectSDK() {
-        VPBleCentralManage.sharedBleManager().veepooSDKDisconnectDevice()
+        VPBleCentralManage.sharedBleManager()?.veepooSDKDisconnectDevice()
         phase = .idle
         DebugLog.shared.info("veepoo: disconnect called")
     }

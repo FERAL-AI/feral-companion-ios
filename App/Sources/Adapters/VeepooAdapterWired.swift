@@ -223,13 +223,16 @@ public final class VeepooAdapterWired: VendorAdapter {
     private func isReadyForMeasurement() async -> Bool {
         await MainActor.run {
             VeepooSession.shared.isDeviceReady
-                && VPBleCentralManage.sharedBleManager().isConnected
+                && (VPBleCentralManage.sharedBleManager()?.isConnected ?? false)
         }
     }
 
     private func measureHeartRate() async -> Result<Int, MeasureError> {
         await withCheckedContinuation { cont in
-            let manager = VPBleCentralManage.sharedBleManager()
+            guard let manager = VPBleCentralManage.sharedBleManager() else {
+                cont.resume(returning: .failure(.deviceBusy))
+                return
+            }
             final class Box { var finished = false }
             let box = Box()
 
@@ -268,12 +271,15 @@ public final class VeepooAdapterWired: VendorAdapter {
 
     private func measureSpO2() async -> Result<Int, MeasureError> {
         let supportsSpO2 = await MainActor.run {
-            VPBleCentralManage.sharedBleManager().peripheralModel.oxygenType != 0
+            (VPBleCentralManage.sharedBleManager()?.peripheralModel.oxygenType ?? 0) != 0
         }
         guard supportsSpO2 else { return .failure(.noSpO2Support) }
 
         return await withCheckedContinuation { cont in
-            let manager = VPBleCentralManage.sharedBleManager()
+            guard let manager = VPBleCentralManage.sharedBleManager() else {
+                cont.resume(returning: .failure(.deviceBusy))
+                return
+            }
             final class Box { var finished = false }
             let box = Box()
 
@@ -314,9 +320,9 @@ public final class VeepooAdapterWired: VendorAdapter {
 
     private func stopActiveTests() async {
         await MainActor.run {
-            let manage = VPBleCentralManage.sharedBleManager().peripheralManage
-            manage.veepooSDKTestHeartStart(false, testResult: nil)
-            manage.veepooSDKTestOxygenStart(false, testResult: nil)
+            let manage = VPBleCentralManage.sharedBleManager()?.peripheralManage
+            manage?.veepooSDKTestHeartStart(false, testResult: nil)
+            manage?.veepooSDKTestOxygenStart(false, testResult: nil)
         }
     }
 
