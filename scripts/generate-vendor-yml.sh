@@ -10,16 +10,35 @@ app_deps=()
 app_sources=()
 test_deps=()
 
+# Static frameworks (an `ar archive` Mach-O) must be LINKED, never embedded:
+# Xcode's "Embed Frameworks" phase runs bitcode_strip, which only works on
+# dynamic Mach-O dylibs and hard-fails on static archives. Detect the arm64
+# device slice and set embed/codeSign accordingly.
 add_framework() {
   local name="$1"
-  if [[ -d "$VENDOR/${name}.framework" ]]; then
-    app_deps+=("      - framework: Vendor/${name}.framework
-        embed: true
-        codeSign: true")
-    test_deps+=("      - framework: Vendor/${name}.framework
+  local fw="$VENDOR/${name}.framework"
+  [[ -d "$fw" ]] || return 0
+  local bin="$fw/${name}"
+  local embed="true" sign="true"
+  if [[ -f "$bin" ]]; then
+    local tmp="/tmp/.vendorcheck_${name}" desc
+    if lipo "$bin" -thin arm64 -output "$tmp" >/dev/null 2>&1; then
+      desc="$(file -b "$tmp")"
+    else
+      desc="$(file -b "$bin")"
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+    if [[ "$desc" == *"ar archive"* ]]; then
+      embed="false"
+      sign="false"
+    fi
+  fi
+  app_deps+=("      - framework: Vendor/${name}.framework
+        embed: ${embed}
+        codeSign: ${sign}")
+  test_deps+=("      - framework: Vendor/${name}.framework
         embed: false
         codeSign: false")
-  fi
 }
 
 add_framework JWBle
