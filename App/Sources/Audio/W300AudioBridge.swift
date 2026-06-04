@@ -100,7 +100,12 @@ public final class W300AudioBridge: ObservableObject {
             .playAndRecord,
             mode: .voiceChat,
             options: [
-                .defaultToSpeaker,
+                // NOTE: `.defaultToSpeaker` was REMOVED here. It forced
+                // playback to the built-in loudspeaker even when a BT
+                // headset (W300) was the preferred input — so TTS stayed on
+                // the phone while the mic was on the glasses. We now set the
+                // output route explicitly below: follow the BT headset when
+                // one is selected, else override to speaker for phone-only.
                 // HFP / classic BT mic + speaker (narrowband).
                 .allowBluetooth,
                 // A2DP output (high-quality stereo). Audit-r8 brief
@@ -129,9 +134,10 @@ public final class W300AudioBridge: ObservableObject {
         // `.allowBluetooth` only makes the W300's classic-BT HFP mic
         // AVAILABLE — iOS otherwise keeps the built-in mic selected, so
         // voice IN (and, since HFP is bidirectional, voice OUT) stayed on
-        // the phone even with the glasses connected. Explicitly prefer the
-        // Bluetooth input so the route follows the headset.
-        Self.preferBluetoothInput(on: session)
+        // the phone even with the glasses connected. Prefer the BT input,
+        // then route output to match (headset if BT, speaker otherwise).
+        let onBluetooth = Self.preferBluetoothInput(on: session)
+        Self.applyOutputRoute(on: session, bluetooth: onBluetooth)
         switch direction {
         case .capture: captureActive = true
         case .playback: playbackActive = true
@@ -145,18 +151,37 @@ public final class W300AudioBridge: ObservableObject {
     /// also pulls playback onto the headset. When no BT input is available
     /// the preference is cleared so iOS falls back to its default (built-in
     /// mic / speaker) cleanly.
-    private static func preferBluetoothInput(on session: AVAudioSession) {
+    /// Returns true iff a Bluetooth headset input was selected as preferred.
+    @discardableResult
+    private static func preferBluetoothInput(on session: AVAudioSession) -> Bool {
         let btInputTypes: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE]
         let available = session.availableInputs ?? []
         do {
             if let bt = available.first(where: { btInputTypes.contains($0.portType) }) {
                 try session.setPreferredInput(bt)
+                return true
             } else {
                 try session.setPreferredInput(nil)
+                return false
             }
         } catch {
             #if DEBUG
             print("[W300AudioBridge] setPreferredInput failed: \(error)")
+            #endif
+            return false
+        }
+    }
+
+    /// Route playback to match the input: when a BT headset (W300) is the
+    /// input, clear any speaker override so output follows the headset (HFP
+    /// is bidirectional); otherwise force the loudspeaker (the behavior the
+    /// old `.defaultToSpeaker` category option provided for phone-only use).
+    private static func applyOutputRoute(on session: AVAudioSession, bluetooth: Bool) {
+        do {
+            try session.overrideOutputAudioPort(bluetooth ? .none : .speaker)
+        } catch {
+            #if DEBUG
+            print("[W300AudioBridge] overrideOutputAudioPort failed: \(error)")
             #endif
         }
     }
@@ -225,7 +250,9 @@ public final class W300AudioBridge: ObservableObject {
             // voice off/on. Gated on `.newDeviceAvailable` so we don't loop
             // on our own setPreferredInput-induced route changes.
             if reason == .newDeviceAvailable, captureActive || playbackActive {
-                Self.preferBluetoothInput(on: AVAudioSession.sharedInstance())
+                let session = AVAudioSession.sharedInstance()
+                let onBluetooth = Self.preferBluetoothInput(on: session)
+                Self.applyOutputRoute(on: session, bluetooth: onBluetooth)
             }
         }
         refreshRoute()
