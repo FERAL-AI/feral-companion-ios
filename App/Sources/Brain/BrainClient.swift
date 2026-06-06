@@ -243,6 +243,14 @@ public final class BrainClient: ObservableObject {
             // those emits are now delivered to the brain's
             // node_subdevices store via `device_event` envelopes.
             JWBleSession.shared.bind(brainNode: node)
+            // Same fix for the Veepoo wristband — Phase 3 wired the
+            // BLE session + adapter but bind(brainNode:) was never
+            // called, so the brain's node_subdevices store stayed
+            // empty for the wristband even when iOS held a verified
+            // BLE link. With this call site the wristband shows up as
+            // a sub-device chip in the WebUI Devices page the moment
+            // VPDeviceConnectState reaches verifyPasswordSuccess.
+            VeepooSession.shared.bind(brainNode: node)
             // Connection state flips to .connected when we observe
             // the first node_ack frame in handleInbound.
             if !(await waitForNodeAck(timeoutSeconds: Self.nodeAckTimeoutSeconds)) {

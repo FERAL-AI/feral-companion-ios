@@ -1,11 +1,17 @@
 import SwiftUI
 
-/// Onboarding step 4: optional BLE peripheral pairing (W300 wristband,
-/// Theora glasses). The user can skip this step entirely.
+/// Onboarding step 4: optional BLE peripheral pairing — Theora W300
+/// glasses (HR/SpO2 + HUD) and Veepoo wristband (HR/SpO2 + ECG).
+/// The user can skip this step entirely. 2026-06-05 demo prep:
+/// the previous "W300 Wristband" label was incorrect (W300 is the
+/// glasses platform; the wristband is Veepoo) and both rows opened
+/// the same glasses-only BLE scan, so the operator could never pair
+/// the wristband from onboarding. Each row now opens the BLE scan
+/// scoped to its own capability id.
 struct PeripheralsStepView: View {
     var onContinue: () -> Void
     @EnvironmentObject var env: AppEnvironment
-    @State private var showBLEScan = false
+    @State private var bleScanCapability: String? = nil
 
     var body: some View {
         VStack(spacing: FeralTheme.padXL) {
@@ -20,7 +26,7 @@ struct PeripheralsStepView: View {
                     .font(.title2.bold())
                     .foregroundStyle(FeralTheme.textPrimary)
 
-                Text("Optionally pair a wristband or glasses. You can always do this later from the Devices tab.")
+                Text("Optionally pair the Theora glasses or the Veepoo wristband. You can always do this later from the Devices tab.")
                     .font(.subheadline)
                     .foregroundStyle(FeralTheme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -28,31 +34,30 @@ struct PeripheralsStepView: View {
             }
 
             VStack(spacing: FeralTheme.padMD) {
-                peripheralCard(
-                    name: "W300 Wristband",
-                    icon: "applewatch",
-                    description: "Heart rate, steps, and wrist-tap gestures.",
-                    isConnected: isW300Connected
-                )
+                Button {
+                    bleScanCapability = "jw_health_glasses"
+                } label: {
+                    peripheralCard(
+                        name: "Theora Glasses (W300)",
+                        icon: "eyeglasses",
+                        description: "BLE mic/speaker, heart rate, SpO2, body temp, UV, steps.",
+                        isConnected: isGlassesConnected
+                    )
+                }
+                .buttonStyle(.plain)
 
-                peripheralCard(
-                    name: "Theora Glasses",
-                    icon: "eyeglasses",
-                    description: "HUD display and scene camera.",
-                    isConnected: isGlassesConnected
-                )
+                Button {
+                    bleScanCapability = "veepoo_wristband"
+                } label: {
+                    peripheralCard(
+                        name: "Veepoo Wristband",
+                        icon: "applewatch",
+                        description: "Heart rate, SpO2, body temp, ECG over BLE.",
+                        isConnected: isWristbandConnected
+                    )
+                }
+                .buttonStyle(.plain)
             }
-            .padding(.horizontal, FeralTheme.padXL)
-
-            Button {
-                showBLEScan = true
-            } label: {
-                Label("Scan for devices", systemImage: "antenna.radiowaves.left.and.right")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, FeralTheme.padSM)
-            }
-            .buttonStyle(.bordered)
-            .tint(FeralTheme.accent)
             .padding(.horizontal, FeralTheme.padXL)
 
             Spacer()
@@ -68,9 +73,19 @@ struct PeripheralsStepView: View {
             .padding(.horizontal, FeralTheme.padXL)
             .padding(.bottom, FeralTheme.padLG)
         }
-        .sheet(isPresented: $showBLEScan) {
-            BLEScanView(isPresented: $showBLEScan, capabilityId: "jw_health_glasses", title: "Peripherals")
-                .environmentObject(env)
+        .sheet(item: Binding(
+            get: { bleScanCapability.map(BLEScanCap.init) },
+            set: { newValue in bleScanCapability = newValue?.id }
+        )) { cap in
+            BLEScanView(
+                isPresented: Binding(
+                    get: { bleScanCapability != nil },
+                    set: { if !$0 { bleScanCapability = nil } }
+                ),
+                capabilityId: cap.id,
+                title: cap.id == "veepoo_wristband" ? "Veepoo Wristband" : "Theora Glasses"
+            )
+            .environmentObject(env)
         }
     }
 
@@ -106,13 +121,21 @@ struct PeripheralsStepView: View {
         .feralGlass()
     }
 
-    private var isW300Connected: Bool {
+    @MainActor
+    private var isGlassesConnected: Bool {
         if case .ready = JWBleSession.shared.phase { return true }
         return false
     }
 
-    private var isGlassesConnected: Bool {
-        // Theora glasses connection state from the shared BLE session
-        false
+    @MainActor
+    private var isWristbandConnected: Bool {
+        if case .ready = VeepooSession.shared.phase { return true }
+        return false
     }
+}
+
+/// Wrapper so a single capability id can drive a `.sheet(item:)` —
+/// String alone doesn't conform to Identifiable.
+private struct BLEScanCap: Identifiable {
+    let id: String
 }
