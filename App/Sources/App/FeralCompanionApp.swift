@@ -75,12 +75,18 @@ struct FeralCompanionApp: App {
             }
             Task { @MainActor in
                 await environment.brain.stopVoice()
-                // WS close and JWBle disconnect are MainActor sync
-                // methods; no await needed and the brain receives
-                // the queued `glasses_status: disconnected` emit on
-                // the still-open socket because stopVoice already
-                // returned.
-                await environment.connection.disconnect()
+                // INTENTIONALLY KEEP the brain WebSocket open across
+                // backgrounding. Tearing it down on every `.background`
+                // transition (lock screen, app switcher, Control
+                // Center, notification pull) was emitting a
+                // `user_disconnect` node_bye to the brain on routine
+                // OS events — so the brain saw the HUP node flap
+                // disconnect→reconnect dozens of times per session.
+                // The `.active` branch below already calls
+                // `connection.connect()` which repairs a half-dead
+                // socket on re-foreground via BrainClient's own
+                // reconnect path. BLE radios still tear down here so
+                // the glasses/wristband links are released cleanly.
                 JWBleSession.shared.disconnect()
                 VeepooSession.shared.disconnect()
                 if bgTaskID != .invalid {

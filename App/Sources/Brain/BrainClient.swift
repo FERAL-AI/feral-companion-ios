@@ -281,7 +281,7 @@ public final class BrainClient: ObservableObject {
         return state.isConnected
     }
 
-    public func disconnect() async {
+    public func disconnect(reason: String = "user_disconnect") async {
         // Tear down voice first so the WS doesn't drop while audio is
         // mid-stream — the brain's voice_router prefers a clean
         // is_final chunk to a half-open socket.
@@ -299,8 +299,12 @@ public final class BrainClient: ObservableObject {
             // first (operator report 2026-05-08:
             // "node_bye reason=shutdown" right after register, even
             // though the user explicitly disconnected). One bye,
-            // correctly labeled.
-            await node.disconnect(reason: "user_disconnect")
+            // correctly labeled. The default reason is
+            // ``user_disconnect`` because the public callers
+            // (SettingsView "Disconnect", unpair) are user actions;
+            // callers with different intent (e.g. internal stale-
+            // socket retry) pass their own reason.
+            await node.disconnect(reason: reason)
         }
         node = nil
         state = .disconnected

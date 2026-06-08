@@ -301,8 +301,8 @@ public final class ConnectionStore: ObservableObject {
         lastConnectStartedAt = Date()
     }
 
-    public func disconnect() async {
-        await brainClient.disconnect()
+    public func disconnect(reason: String = "user_disconnect") async {
+        await brainClient.disconnect(reason: reason)
         status = brainURL == nil ? .unpaired : .paired(brainURL: brainURL!, nodeId: nodeId)
     }
 

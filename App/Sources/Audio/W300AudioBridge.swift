@@ -176,9 +176,29 @@ public final class W300AudioBridge: ObservableObject {
     /// input, clear any speaker override so output follows the headset (HFP
     /// is bidirectional); otherwise force the loudspeaker (the behavior the
     /// old `.defaultToSpeaker` category option provided for phone-only use).
+    ///
+    /// Crucially, we only force the iPhone loudspeaker when the current
+    /// route has NO Bluetooth output present. The W300 commonly exposes
+    /// an A2DP OUTPUT route without an HFP/LE MIC — in that case
+    /// `preferBluetoothInput` returns false (no BT mic available), but
+    /// blindly calling `overrideOutputAudioPort(.speaker)` would yank
+    /// playback off the W300 A2DP route and back to the phone speaker
+    /// (the same regression `.defaultToSpeaker` used to cause). Checking
+    /// `session.currentRoute.outputs` preserves W300 A2DP playback while
+    /// still defaulting to the loudspeaker for phone-only hands-free use.
     private static func applyOutputRoute(on session: AVAudioSession, bluetooth: Bool) {
         do {
-            try session.overrideOutputAudioPort(bluetooth ? .none : .speaker)
+            if bluetooth {
+                try session.overrideOutputAudioPort(.none)
+                return
+            }
+            let btOutputTypes: Set<AVAudioSession.Port> = [
+                .bluetoothHFP, .bluetoothA2DP, .bluetoothLE,
+            ]
+            let hasBTOutput = session.currentRoute.outputs.contains { output in
+                btOutputTypes.contains(output.portType)
+            }
+            try session.overrideOutputAudioPort(hasBTOutput ? .none : .speaker)
         } catch {
             #if DEBUG
             print("[W300AudioBridge] overrideOutputAudioPort failed: \(error)")
@@ -245,11 +265,27 @@ public final class W300AudioBridge: ObservableObject {
            let reason = AVAudioSession.RouteChangeReason(rawValue: raw)
         {
             lastRouteChangeReason = reason
-            // W300 connected mid-conversation: re-assert it as the preferred
-            // input so voice follows the glasses without the user toggling
-            // voice off/on. Gated on `.newDeviceAvailable` so we don't loop
-            // on our own setPreferredInput-induced route changes.
-            if reason == .newDeviceAvailable, captureActive || playbackActive {
+            // Re-assert input + output routing whenever the system
+            // tells us the route landscape changed. The previous gate
+            // was `.newDeviceAvailable` only, which missed the very
+            // common case of the W300 negotiating its HFP/LE mic
+            // profile a fraction of a second AFTER the initial A2DP
+            // output appeared — by then we had already locked in
+            // built-in mic + speaker. Adding `.oldDeviceUnavailable`,
+            // `.routeConfigurationChange`, `.override`, and
+            // `.categoryChange` lets us re-apply the correct route
+            // whenever iOS reshapes the route graph. The
+            // `setPreferredInput` / `overrideOutputAudioPort` calls
+            // are idempotent enough that re-running on a transient
+            // change doesn't introduce a feedback loop.
+            let reEvaluateReasons: Set<AVAudioSession.RouteChangeReason> = [
+                .newDeviceAvailable,
+                .oldDeviceUnavailable,
+                .routeConfigurationChange,
+                .override,
+                .categoryChange,
+            ]
+            if reEvaluateReasons.contains(reason), captureActive || playbackActive {
                 let session = AVAudioSession.sharedInstance()
                 let onBluetooth = Self.preferBluetoothInput(on: session)
                 Self.applyOutputRoute(on: session, bluetooth: onBluetooth)
