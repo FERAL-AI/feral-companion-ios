@@ -235,6 +235,24 @@ public final class W300AudioBridge: ObservableObject {
         currentRoute = Self.snapshot()
     }
 
+    /// Re-assert the BT input/output preference for the CURRENT session
+    /// without flipping the capture/playback direction flags. Called when
+    /// an external event — e.g. `JWBleSession` finishing W300 HFP headset
+    /// pairing — makes a new `.bluetoothHFP` route available while a voice
+    /// session is already running, so voice immediately follows the glasses
+    /// instead of waiting for the next `activate(...)`. When no session is
+    /// active this just refreshes the published snapshot.
+    public func reassertRouteIfActive() {
+        guard captureActive || playbackActive else {
+            refreshRoute()
+            return
+        }
+        let session = AVAudioSession.sharedInstance()
+        let onBluetooth = Self.preferBluetoothInput(on: session)
+        Self.applyOutputRoute(on: session, bluetooth: onBluetooth)
+        refreshRoute()
+    }
+
     // MARK: - Internals
 
     private func installNotifications() {

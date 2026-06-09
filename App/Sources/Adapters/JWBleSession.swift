@@ -53,6 +53,10 @@ public final class JWBleSession: ObservableObject {
     // MARK: - Private
 
     private var callbacksInstalled = false
+    /// Guards the one-shot audio-enable + headphone-pairing sequence so we
+    /// don't re-pop the iOS Bluetooth pairing dialog on every status
+    /// callback. Reset on disconnect so a reconnect re-enables glasses audio.
+    private var audioSetupDone = false
     private static let lastPeripheralKey = "feral.jwble.lastPeripheralUUID"
     private weak var boundNode: FeralNode?
 
@@ -174,6 +178,7 @@ extension JWBleSession {
                 "device_name": .string(bondName),
                 "promoted_from": .string("bond_success"),
             ])
+            enableGlassesAudioSDK()
 
         case .bondFailure:
             DebugLog.shared.error("jwble: status=BondFailure")
@@ -185,6 +190,7 @@ extension JWBleSession {
             DebugLog.shared.success("jwble: status=SyncSuccess — device ready (\(name))")
             phase = .ready(name: name)
             emitGlassesStatus("ready", extra: ["device_name": .string(name)])
+            enableGlassesAudioSDK()
 
         case .syncFailure:
             DebugLog.shared.error("jwble: status=SyncFailure")
@@ -204,9 +210,11 @@ extension JWBleSession {
 
         case .headphoneDeviceStatusChanged:
             DebugLog.shared.info("jwble: HeadphoneDeviceStatusChanged")
+            readHeadphoneStatusAfterDelaySDK()
 
         case .timeOutDisconnect:
             DebugLog.shared.warning("jwble: TimeOutDisconnect — BLE comm timed out")
+            audioSetupDone = false
             phase = .failed(reason: "Communication timeout — glasses disconnected")
             emitGlassesStatus("disconnected", extra: ["reason": .string("timeout_disconnect")])
 
@@ -227,6 +235,7 @@ extension JWBleSession {
 
         case .disConnect:
             DebugLog.shared.warning("jwble: status=DisConnect")
+            audioSetupDone = false
             if case .ready = phase {
                 phase = .failed(reason: "Glasses disconnected")
                 emitGlassesStatus(
@@ -303,6 +312,67 @@ extension JWBleSession {
         JWBleAction.jwConnectDevice(entry.sdkModel)
     }
 
+    /// After the glasses reach `.ready`, switch them into classic-Bluetooth
+    /// headset mode so iOS exposes a `.bluetoothHFP` route (mic + speaker).
+    /// Without this the W300 stays a BLE-sensors-only peripheral and voice
+    /// keeps using the iPhone mic/speaker (the "audio stuck on phone" bug).
+    ///
+    /// Sequence mirrors the vendor reference: enable the audio function
+    /// (`jwAudioAction open:YES`), then — only if the headset hasn't been
+    /// paired before — kick `jwHeadphonePairing` which pops the iOS
+    /// Bluetooth pairing dialog. One-shot per connection (`audioSetupDone`).
+    fileprivate func enableGlassesAudioSDK() {
+        guard !audioSetupDone else { return }
+        audioSetupDone = true
+
+        DebugLog.shared.info("jwble: enabling glasses audio (jwAudioAction open=true)")
+        JWBleAction.jwAudioAction(false, open: true) { [weak self] status, open in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                DebugLog.shared.info(
+                    "jwble: jwAudioAction result status=\(status.rawValue) open=\(open)"
+                )
+                let alreadyPaired = JWBleManager.shareInstance().connectionModel.headsetPaired
+                if alreadyPaired {
+                    DebugLog.shared.info(
+                        "jwble: headset already paired — re-asserting audio route"
+                    )
+                    self.readHeadphoneStatusAfterDelaySDK()
+                } else {
+                    DebugLog.shared.info(
+                        "jwble: initiating headphone pairing (iOS Bluetooth dialog)"
+                    )
+                    JWBleAction.jwHeadphonePairing()
+                }
+            }
+        }
+    }
+
+    /// The SDK updates `connectionModel` asynchronously AFTER the
+    /// `.headphoneDeviceStatusChanged` callback fires, so we wait 150ms
+    /// (matching the vendor reference) before reading the headset status.
+    /// Status 3 (connected) / 4 (connected-to-phone) means the classic-BT
+    /// HFP route is live — nudge `W300AudioBridge` so an active voice
+    /// session immediately follows the glasses instead of the iPhone.
+    fileprivate func readHeadphoneStatusAfterDelaySDK() {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard let self = self else { return }
+            let model = JWBleManager.shareInstance().connectionModel
+            let st = model.headphoneDeviceStatus
+            let paired = model.headsetPaired
+            DebugLog.shared.info("jwble: headphone status=\(st) paired=\(paired)")
+            // 0=shutdown 1=pairing 2=ready 3=connected 4=connected-to-phone
+            if st == 3 || st == 4 {
+                W300AudioBridge.shared.reassertRouteIfActive()
+                self.emitGlassesStatus("audio_ready", extra: [
+                    "headphone_status": .string("\(st)"),
+                    "headset_paired": .string(paired ? "true" : "false"),
+                ])
+            }
+        }
+    }
+
     fileprivate func attemptAutoReconnectSDK() {
         guard let savedUUID = UserDefaults.standard.string(forKey: Self.lastPeripheralKey) else {
             DebugLog.shared.info("jwble: no saved peripheral UUID — skipping auto-reconnect")
@@ -349,6 +419,7 @@ extension JWBleSession {
 
     fileprivate func disconnectSDK() {
         JWBleAction.jwDisConnect()
+        audioSetupDone = false
         phase = .idle
         DebugLog.shared.info("jwble: disconnect called")
     }
