@@ -464,7 +464,11 @@ public final class BrainClient: ObservableObject {
                 if sid != chatSessionId { chatSessionId = sid }
             }
             if case .string(let text) = frame.payload["text"] ?? .null, !text.isEmpty {
-                transcript.append(BrainMessage(role: .assistant, text: text))
+                // Parity with the WebUI: a tool-call envelope / internal
+                // status line must never render as assistant prose.
+                if !TranscriptArtifactFilter.isInternalArtifact(text) {
+                    transcript.append(BrainMessage(role: .assistant, text: text))
+                }
                 isAssistantSpeaking = false
             }
 
@@ -508,7 +512,15 @@ public final class BrainClient: ObservableObject {
             } else {
                 liveTranscript = nil
                 if !cleanText.isEmpty {
-                    transcript.append(BrainMessage(role: role, text: cleanText))
+                    // Suppress internal tool-call/status artifacts that
+                    // arrive as assistant `transcript` frames (notably the
+                    // realtime-voice progress path), mirroring the WebUI.
+                    // User-spoken text is never filtered.
+                    let suppress = role != .user
+                        && TranscriptArtifactFilter.isInternalArtifact(cleanText)
+                    if !suppress {
+                        transcript.append(BrainMessage(role: role, text: cleanText))
+                    }
                 }
             }
 
@@ -687,6 +699,14 @@ public final class BrainClient: ObservableObject {
                 let ts = (entry["ts_ms"] as? Int) ?? 0
                 guard !text.isEmpty,
                       let role = BrainMessage.Role(rawValue: roleStr) else { continue }
+                // Defense-in-depth: never resurrect an internal
+                // tool-call/status artifact from REST history (mirrors
+                // the live-frame filter above). Advance the cursor so we
+                // don't refetch the skipped row on every reconcile.
+                if role != .user, TranscriptArtifactFilter.isInternalArtifact(text) {
+                    if ts > lastSeenTranscriptTs { lastSeenTranscriptTs = ts }
+                    continue
+                }
                 // De-dupe by (role, text) against the tail of the
                 // local transcript — covers the case where the user
                 // sent a message that was both echoed locally AND

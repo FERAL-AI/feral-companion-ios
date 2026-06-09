@@ -398,4 +398,54 @@ final class FeralCompanionTests: XCTestCase {
         let anon = BrainHTTP.authorized(url, bearer: nil)
         XCTAssertNil(anon.value(forHTTPHeaderField: "Authorization"))
     }
+
+    // MARK: - Transcript artifact suppression (WebUI parity)
+    //
+    // The brain emits internal tool-call envelopes and "Running …"
+    // status lines that the WebUI surfaces as collapsible tool cards,
+    // never as chat prose. iOS only renders chat/transcript frames, so
+    // it must classify and drop those artifacts at ingest. These tests
+    // pin the classifier that drives that suppression.
+
+    /// The exact tool-call envelope from the reported bug —
+    /// `{"script": "tell application \"Music\" to activate"}` — and its
+    /// sibling shapes must be recognized as internal artifacts.
+    func testTranscriptFilterSuppressesToolEnvelopeJSON() {
+        let music = #"{ "script": "tell application \"Music\" to activate" }"#
+        XCTAssertTrue(TranscriptArtifactFilter.isInternalArtifact(music))
+
+        XCTAssertTrue(TranscriptArtifactFilter.isInternalArtifact(
+            #"{"command": "open https://example.com"}"#))
+        XCTAssertTrue(TranscriptArtifactFilter.isInternalArtifact(
+            #"{"tool": "desktop_control__open_app", "args": {"x": 1}}"#))
+
+        // Truncated args_preview (json.dumps(args)[:160]) still caught.
+        XCTAssertTrue(TranscriptArtifactFilter.isInternalArtifact(
+            #"{"script": "tell application \"Music\" to acti"#))
+    }
+
+    /// The brain's internal "Running <skill>." status line must be
+    /// suppressed; ordinary assistant prose that merely begins with
+    /// "Running" must NOT be.
+    func testTranscriptFilterSuppressesRunningStatusLine() {
+        XCTAssertTrue(TranscriptArtifactFilter.isInternalArtifact("Running open app."))
+        XCTAssertTrue(TranscriptArtifactFilter.isInternalArtifact(
+            "Running a command on your computer."))
+
+        // Genuine prose is preserved.
+        XCTAssertFalse(TranscriptArtifactFilter.isInternalArtifact(
+            "Running a marathon next month takes months of training, so let's build a plan."))
+    }
+
+    /// Real assistant replies and user text are never classified as
+    /// artifacts — the filter must not eat legitimate conversation.
+    func testTranscriptFilterPreservesRealMessages() {
+        XCTAssertFalse(TranscriptArtifactFilter.isInternalArtifact("The Music app is now open."))
+        XCTAssertFalse(TranscriptArtifactFilter.isInternalArtifact(
+            "What's on your mind? Thinking about putting on some music?"))
+        XCTAssertFalse(TranscriptArtifactFilter.isInternalArtifact("Can you open a music app?"))
+        XCTAssertFalse(TranscriptArtifactFilter.isInternalArtifact(""))
+        // JSON-looking prose without an envelope key is left alone.
+        XCTAssertFalse(TranscriptArtifactFilter.isInternalArtifact(#"{"answer": 42}"#))
+    }
 }
