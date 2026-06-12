@@ -241,8 +241,10 @@ final class BLEPeripheralScannerAdapterTests: XCTestCase {
 
     func test_canHandleAction_always_false() async {
         let (adapter, _) = makeAdapter()
-        XCTAssertFalse(await adapter.canHandleAction(named: "buzz"))
-        XCTAssertFalse(await adapter.canHandleAction(named: "anything"))
+        let canBuzz = await adapter.canHandleAction(named: "buzz")
+        let canAnything = await adapter.canHandleAction(named: "anything")
+        XCTAssertFalse(canBuzz)
+        XCTAssertFalse(canAnything)
     }
 }
 
