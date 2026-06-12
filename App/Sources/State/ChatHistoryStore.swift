@@ -184,16 +184,19 @@ private struct CodableMessage: Codable {
     let role: String
     let text: String
     let timestamp: Date
+    /// Optional so pre-attachment history files decode unchanged.
+    let imageData: Data?
 
     init(from msg: BrainMessage) {
         self.id = msg.id
         self.role = msg.role.rawValue
         self.text = msg.text
         self.timestamp = msg.timestamp
+        self.imageData = msg.imageData
     }
 
     func toBrainMessage() -> BrainMessage {
         let r = BrainMessage.Role(rawValue: role) ?? .system
-        return BrainMessage(id: id, role: r, text: text, timestamp: timestamp)
+        return BrainMessage(id: id, role: r, text: text, timestamp: timestamp, imageData: imageData)
     }
 }

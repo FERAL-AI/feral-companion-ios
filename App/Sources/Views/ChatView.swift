@@ -1,4 +1,6 @@
 import SwiftUI
+import PhotosUI
+import UIKit
 
 /// Mutable composer state held in a long-lived ObservableObject so
 /// SwiftUI doesn't reset the input every time `env` republishes
@@ -8,6 +10,10 @@ import SwiftUI
 @MainActor
 final class ChatComposer: ObservableObject {
     @Published var input: String = ""
+    /// PhotosPicker selection — transient; decoded into `attachedImage`.
+    @Published var photoItem: PhotosPickerItem? = nil
+    /// Image staged for the next send (thumbnail shown above the bar).
+    @Published var attachedImage: UIImage? = nil
 }
 
 /// Chat + voice. The user can type to the brain, and tap the mic
@@ -131,11 +137,63 @@ struct ChatView: View {
                 }
             }
 
+            // Staged attachment preview — thumbnail with an X to
+            // remove before sending.
+            if let attached = composer.attachedImage {
+                HStack(spacing: 8) {
+                    Image(uiImage: attached)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 56, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: FeralTheme.radiusMD, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: FeralTheme.radiusMD, style: .continuous)
+                                .stroke(FeralTheme.hairline, lineWidth: 0.5)
+                        )
+                    Text("Image attached")
+                        .font(.caption)
+                        .foregroundStyle(FeralTheme.textSecondary)
+                    Spacer()
+                    Button {
+                        composer.attachedImage = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(FeralTheme.textTertiary)
+                    }
+                    .accessibilityLabel("Remove attached image")
+                }
+                .padding(.horizontal, FeralTheme.padLG)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial)
+            }
+
             // Composer. Single-line so .submitLabel(.send) + .onSubmit
             // actually trigger send on Return (vertical text fields
             // suppress submit). @StateObject composer holds the input
             // string so re-renders of env.* don't drop keystrokes.
             HStack(spacing: 8) {
+                // Media attach — picks one photo; sent via the brain's
+                // vision_ask path on the next send.
+                PhotosPicker(selection: $composer.photoItem, matching: .images) {
+                    Image(systemName: "paperclip")
+                        .font(.title2)
+                        .foregroundStyle(composer.attachedImage == nil ? FeralTheme.textTertiary : FeralTheme.accent)
+                }
+                .accessibilityLabel("Attach an image")
+                .onChange(of: composer.photoItem) { item in
+                    guard let item else { return }
+                    Task {
+                        if let data = try? await item.loadTransferable(type: Data.self),
+                           let image = UIImage(data: data) {
+                            composer.attachedImage = image
+                        } else {
+                            env.chat.appendSystemMessage("Couldn't load that image.")
+                        }
+                        composer.photoItem = nil
+                    }
+                }
+
                 TextField("Ask FERAL anything", text: $composer.input)
                     .textFieldStyle(.plain)
                     .focused($inputFocused)
@@ -219,19 +277,24 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        !composer.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !env.chat.sending
+        let hasContent = !composer.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || composer.attachedImage != nil
+        return hasContent && !env.chat.sending
     }
 
     private func sendCurrent() async {
         let text = composer.input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let image = composer.attachedImage
+        guard !text.isEmpty || image != nil else { return }
         if !env.brain.state.isConnected {
             env.chat.appendSystemMessage("Not connected to a brain. Open Settings → Pair with a brain.")
             return
         }
         env.chat.draft = text
+        env.chat.pendingImage = image
         await env.chat.send()
         composer.input = ""
+        composer.attachedImage = nil
         inputFocused = false
     }
 
@@ -386,7 +449,19 @@ private struct ChatBubble: View {
         HStack {
             if message.role == .user { Spacer(minLength: 32) }
             VStack(alignment: alignment, spacing: 2) {
+                if let data = message.imageData, let image = UIImage(data: data) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 220, maxHeight: 220)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(FeralTheme.hairline, lineWidth: 0.5)
+                        )
+                }
                 Text(message.text)
+                    .textSelection(.enabled)
                     .padding(.horizontal, 14).padding(.vertical, 10)
                     .background(background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .foregroundStyle(foreground)
@@ -394,6 +469,15 @@ private struct ChatBubble: View {
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .stroke(borderColor, lineWidth: 0.5)
                     )
+                    // textSelection alone is clunky for multi-line text
+                    // on iOS — long-press Copy grabs the whole message.
+                    .contextMenu {
+                        Button {
+                            UIPasteboard.general.string = message.text
+                        } label: {
+                            Label("Copy", systemImage: "doc.on.doc")
+                        }
+                    }
                 Text(message.role.rawValue.capitalized)
                     .font(.caption2)
                     .foregroundStyle(FeralTheme.textTertiary)

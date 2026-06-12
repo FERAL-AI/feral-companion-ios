@@ -328,6 +328,42 @@ public final class BrainClient: ObservableObject {
         )
     }
 
+    /// Send a chat message with an attached image (chat media attach).
+    ///
+    /// Reuses the brain's existing vision plumbing — no new protocol:
+    ///   1. The JPEG goes out as a HUP `video_frame` device_event,
+    ///      which `api/server.py:_handle_video_frame` pushes into
+    ///      `state.vision_buffer` keyed by this node id.
+    ///   2. The chat turn goes out on `channel: "vision_ask"`, which
+    ///      makes the brain refresh perception from the vision buffer
+    ///      and attach the frame to the LLM turn (same path the
+    ///      camera-as-glasses demo uses).
+    /// - Parameter imageJPEG: Pre-encoded JPEG bytes, already under
+    ///   the brain's 512 KiB `video_frame` base64 cap (HUP 4020) —
+    ///   see `ChatImageEncoder`.
+    public func sendChat(
+        _ text: String,
+        imageJPEG: Data,
+        width: Int,
+        height: Int,
+        sessionId: String? = nil
+    ) async throws {
+        guard let node else { throw BrainClientError.notConnected }
+        let sid = sessionId ?? chatSessionId
+        transcript.append(BrainMessage(role: .user, text: text, imageData: imageJPEG))
+        try await node.emitVideoFrame(
+            jpegBase64: imageJPEG.base64EncodedString(),
+            width: width,
+            height: height
+        )
+        try await node.sendChatRequest(
+            text: text,
+            sessionId: sid,
+            replyMode: .final,
+            channel: .vision_ask
+        )
+    }
+
     /// Phase 5 / audit-r8 brief #04 — forward a SwiftUI SDUI tap /
     /// toggle / slider / form submit to the brain. Echoes back the
     /// `app_id`/`surface_id`/`screen_id` from the original
@@ -748,14 +784,19 @@ public struct BrainMessage: Identifiable, Equatable {
     public let role: Role
     public let text: String
     public let timestamp: Date
+    /// JPEG bytes of an image the user attached to this message
+    /// (chat media attach). Rendered in the chat bubble; nil for
+    /// text-only messages.
+    public let imageData: Data?
 
     public enum Role: String, Equatable { case user, assistant, system }
 
-    public init(id: UUID = UUID(), role: Role, text: String, timestamp: Date = Date()) {
+    public init(id: UUID = UUID(), role: Role, text: String, timestamp: Date = Date(), imageData: Data? = nil) {
         self.id = id
         self.role = role
         self.text = text
         self.timestamp = timestamp
+        self.imageData = imageData
     }
 }
 
