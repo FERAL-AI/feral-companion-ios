@@ -10,6 +10,7 @@ struct DevicesView: View {
     @State private var bleScanTitle: String = ""
 
     @StateObject private var audioBridge = W300AudioBridge.shared
+    @StateObject private var glasses = JWBleSession.shared
 
     var body: some View {
         List {
@@ -28,6 +29,11 @@ struct DevicesView: View {
             Section {
                 AudioRouteRow(snapshot: audioBridge.currentRoute,
                               lastReason: audioBridge.lastRouteChangeReason)
+                if let hint = glasses.audioPairingHint {
+                    Label(hint, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(FeralTheme.stateLive)
+                }
             } header: {
                 HStack {
                     Image(systemName: "waveform.circle")
@@ -117,8 +123,29 @@ private struct AudioRouteRow: View {
     let snapshot: W300AudioBridge.RouteSnapshot
     let lastReason: AVAudioSession.RouteChangeReason?
 
+    /// True iff BOTH directions are on the glasses' bidirectional HFP
+    /// link — the only configuration that proves full-duplex glasses voice.
+    private var bothOnHFP: Bool {
+        let hfp = AVAudioSession.Port.bluetoothHFP.rawValue
+        return snapshot.inputPortType == hfp && snapshot.outputPortType == hfp
+    }
+
+    private var voiceSummary: String {
+        if bothOnHFP { return "Voice in + out via \(snapshot.outputName)" }
+        if snapshot.isBluetoothHeadset { return "Bluetooth handoff in progress…" }
+        return "Voice in + out via iPhone"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: bothOnHFP ? "checkmark.circle.fill" : "iphone")
+                    .font(.caption)
+                    .foregroundStyle(bothOnHFP ? FeralTheme.stateLive : FeralTheme.textTertiary)
+                Text(voiceSummary)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(bothOnHFP ? FeralTheme.stateLive : FeralTheme.textSecondary)
+            }
             HStack {
                 Text("Output")
                     .font(.caption2)

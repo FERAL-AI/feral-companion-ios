@@ -12,13 +12,18 @@ import Foundation
 // pairing — iOS owns that. What we do own:
 //
 //   1. The session policy: `playAndRecord`, `.voiceChat`, options
-//      including `.allowBluetooth` (HFP mic, narrowband 8/16 kHz)
-//      AND `.allowBluetoothA2DP` (high-quality stereo OUT). The old
-//      capture path requested only `.allowBluetooth`, which on iOS
-//      26 disables high-quality A2DP output for the same session
-//      and forces the W300 mic to handle TTS playback through the
-//      narrowband HFP profile. Adding `.allowBluetoothA2DP` here
-//      lets iOS pick the better profile for each direction.
+//      `[.allowBluetooth, .duckOthers]` — **HFP ONLY**. The glasses'
+//      mic + speaker ride the Bluetooth HFP/SCO link, which is
+//      bidirectional. `.allowBluetooth` is the HFP enable flag
+//      (renamed `.allowBluetoothHFP` on the iOS 26 SDK; identical
+//      meaning, and `.allowBluetooth` still compiles + works on the
+//      iOS 16 deployment target). We deliberately do **NOT** pass
+//      `.allowBluetoothA2DP`: A2DP is a one-way media-out profile
+//      that is mutually exclusive with the HFP SCO link an active
+//      mic needs. Allowing it makes iOS prefer A2DP for OUTPUT, so
+//      the assistant's voice routes to A2DP / the iPhone speaker
+//      instead of the glasses speaker (an observed regression). For
+//      voice (24 kHz mono) HFP is the correct and only profile.
 //
 //   2. Route observation: published `currentRoute` so the Devices
 //      tab can show "Voice in/out routed via W300" with the actual
@@ -82,6 +87,16 @@ public final class W300AudioBridge: ObservableObject {
 
     private var observers: [NSObjectProtocol] = []
 
+    /// Bounded poll task that re-acquires the glasses HFP input after it
+    /// surfaces late (~0.5–1.5 s post-activation). Cancelled on deactivate.
+    private var hfpReacquireTask: Task<Void, Never>?
+
+    /// Set by `AudioCapture` so the bridge can ask it to rebuild its input
+    /// tap + converter onto a glasses HFP mic that arrived *after* capture
+    /// already started (otherwise capture stays stuck on the iPhone mic).
+    /// Cleared by `AudioCapture.stop()`.
+    public var captureRestartHandler: (() -> Void)?
+
     private init() {
         installNotifications()
         refreshRoute()
@@ -91,58 +106,50 @@ public final class W300AudioBridge: ObservableObject {
 
     public enum Direction { case capture, playback }
 
-    /// Activate the shared playAndRecord session with options that
-    /// allow BOTH HFP mic and A2DP output, then refresh the route
-    /// snapshot. Idempotent — repeated calls are cheap.
+    /// Activate the shared playAndRecord session for full-duplex voice
+    /// over the glasses' bidirectional HFP/SCO link, then refresh the
+    /// route snapshot. Idempotent — repeated calls are cheap.
     public func activate(for direction: Direction) throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(
-            .playAndRecord,
-            mode: .voiceChat,
-            options: [
-                // NOTE: `.defaultToSpeaker` was REMOVED here. It forced
-                // playback to the built-in loudspeaker even when a BT
-                // headset (W300) was the preferred input — so TTS stayed on
-                // the phone while the mic was on the glasses. We now set the
-                // output route explicitly below: follow the BT headset when
-                // one is selected, else override to speaker for phone-only.
-                // HFP / classic BT mic + speaker (narrowband).
-                .allowBluetooth,
-                // A2DP output (high-quality stereo). Audit-r8 brief
-                // #03 gap: the prior capture-only path omitted this
-                // and forced TTS through HFP whenever the W300 was
-                // also acting as the mic. Adding it lets the system
-                // pick the better profile per direction.
-                .allowBluetoothA2DP,
-                // Phase 8 (audit-r10 overhaul) — `.mixWithOthers`
-                // was REMOVED. It coexists badly with `.voiceChat`
-                // mode's loudspeaker echo cancellation: iOS hands
-                // the speaker output through a non-AEC mix path
-                // when this flag is set, and the built-in mic then
-                // picks up the assistant's own TTS — exactly the
-                // "voice itself echoes, replying to its own audio
-                // when not using headphones" operator complaint.
-                // `.duckOthers` stays so background audio (Music,
-                // podcasts) ducks while FERAL is speaking, without
-                // disabling AEC.
-                .duckOthers,
-            ]
-        )
+        // HFP ONLY — see the file header (item 1). `.allowBluetooth` is
+        // the HFP enable flag (== `.allowBluetoothHFP` on iOS 26). We must
+        // NOT add `.allowBluetoothA2DP`: it hijacks OUTPUT to A2DP / the
+        // iPhone speaker and kills glasses-speaker playback while the mic
+        // is active. `.voiceChat` mode keeps system AEC on (do NOT use
+        // `.measurement` — it disables HFP input). `.duckOthers` ducks
+        // background media without disabling AEC. No `.mixWithOthers`
+        // (non-AEC mix path → mic picks up the assistant's own TTS) and no
+        // `.defaultToSpeaker` (forces the iPhone loudspeaker).
+        // `.allowBluetoothHFP` (iOS 26) == `.allowBluetooth` (iOS 16+);
+        // gate by availability so we get the non-deprecated spelling on the
+        // newer SDK while still compiling/working on the iOS 16 target.
+        var options: AVAudioSession.CategoryOptions = [.duckOthers]
+        if #available(iOS 26.0, *) {
+            options.insert(.allowBluetoothHFP)
+        } else {
+            options.insert(.allowBluetooth)
+        }
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
         try session.setPreferredSampleRate(24000)
         try session.setPreferredIOBufferDuration(0.01)
         try session.setActive(true, options: [])
-        // `.allowBluetooth` only makes the W300's classic-BT HFP mic
-        // AVAILABLE — iOS otherwise keeps the built-in mic selected, so
-        // voice IN (and, since HFP is bidirectional, voice OUT) stayed on
-        // the phone even with the glasses connected. Prefer the BT input,
-        // then route output to match (headset if BT, speaker otherwise).
-        let onBluetooth = Self.preferBluetoothInput(on: session)
-        Self.applyOutputRoute(on: session, bluetooth: onBluetooth)
         switch direction {
         case .capture: captureActive = true
         case .playback: playbackActive = true
         }
+        // `.allowBluetooth` only makes the glasses' HFP mic AVAILABLE — iOS
+        // otherwise keeps the built-in mic selected, so voice IN (and,
+        // since HFP is bidirectional, voice OUT) would stay on the phone.
+        // Prefer the HFP input, then route output to match. The HFP/SCO
+        // link often takes ~0.5–1.5 s to appear after activation, so if it
+        // isn't here yet, poll for it instead of forcing the iPhone speaker.
+        let onBluetooth = Self.preferBluetoothInput(on: session)
+        Self.applyOutputRoute(on: session, bluetooth: onBluetooth)
+        if !onBluetooth {
+            scheduleHFPReacquire()
+        }
         refreshRoute()
+        logRoute("activate.\(direction == .capture ? "capture" : "playback")")
     }
 
     /// Select a connected Bluetooth headset (W300 / AirPods / any HFP or
@@ -154,10 +161,14 @@ public final class W300AudioBridge: ObservableObject {
     /// Returns true iff a Bluetooth headset input was selected as preferred.
     @discardableResult
     private static func preferBluetoothInput(on session: AVAudioSession) -> Bool {
-        let btInputTypes: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE]
         let available = session.availableInputs ?? []
+        // Prefer HFP specifically (the glasses' bidirectional voice link),
+        // then fall back to LE-audio. A2DP never appears as an INPUT, so it
+        // can't be selected here.
+        let bt = available.first(where: { $0.portType == .bluetoothHFP })
+            ?? available.first(where: { $0.portType == .bluetoothLE })
         do {
-            if let bt = available.first(where: { btInputTypes.contains($0.portType) }) {
+            if let bt {
                 try session.setPreferredInput(bt)
                 return true
             } else {
@@ -169,6 +180,45 @@ public final class W300AudioBridge: ObservableObject {
             print("[W300AudioBridge] setPreferredInput failed: \(error)")
             #endif
             return false
+        }
+    }
+
+    /// Poll up to 6× at 300 ms for the glasses' HFP mic to surface after
+    /// `setActive(true)`. iOS commonly exposes the `.bluetoothHFP` port a
+    /// second or so late — and frequently *after* an output route appears,
+    /// which is why preferring it on the first try fails. On success we
+    /// prefer it, reassert output onto the glasses, and — if capture is
+    /// already running on the iPhone mic — ask `AudioCapture` to rebuild
+    /// its tap so input moves to the glasses. Bounded: gives up after
+    /// ~1.8 s and leaves voice on the iPhone rather than spinning forever.
+    private func scheduleHFPReacquire() {
+        hfpReacquireTask?.cancel()
+        hfpReacquireTask = Task { @MainActor [weak self] in
+            let session = AVAudioSession.sharedInstance()
+            for _ in 1...6 {
+                try? await Task.sleep(nanoseconds: 300_000_000) // 300 ms
+                guard let self, !Task.isCancelled else { return }
+                // Only chase the route while a voice session is live.
+                guard self.captureActive || self.playbackActive else { return }
+                if let hfp = session.availableInputs?.first(where: {
+                    $0.portType == .bluetoothHFP
+                }) {
+                    try? session.setPreferredInput(hfp)
+                    Self.applyOutputRoute(on: session, bluetooth: true)
+                    if self.captureActive {
+                        // Capture is on the iPhone mic — rebuild its tap so
+                        // it now reads from the glasses.
+                        self.captureRestartHandler?()
+                    }
+                    self.refreshRoute()
+                    self.logRoute("hfp-reacquired")
+                    return
+                }
+            }
+            // Gave up — staying on the iPhone mic; the published route
+            // snapshot reflects the truth for the UI.
+            self?.refreshRoute()
+            self?.logRoute("hfp-reacquire-gaveup")
         }
     }
 
@@ -215,6 +265,10 @@ public final class W300AudioBridge: ObservableObject {
         case .playback: playbackActive = false
         }
         guard !captureActive, !playbackActive else { return }
+        // No voice direction left — stop any in-flight HFP poll so it can't
+        // re-assert a route after we've torn the session down.
+        hfpReacquireTask?.cancel()
+        hfpReacquireTask = nil
         do {
             try AVAudioSession.sharedInstance().setActive(
                 false,
@@ -235,6 +289,30 @@ public final class W300AudioBridge: ObservableObject {
         currentRoute = Self.snapshot()
     }
 
+    /// Log the live `AVAudioSession.currentRoute` (inputs/outputs, whether
+    /// `.bluetoothHFP` is on each side, and whether an HFP input is even
+    /// available yet) to the in-app DebugLog. Lets the operator verify at
+    /// runtime — from the Settings → Debug log, no Xcode attach — that voice
+    /// is actually on the glasses HFP route vs the iPhone. Called on
+    /// activate, every relevant route change, and HFP (re)acquire.
+    private func logRoute(_ context: String) {
+        let session = AVAudioSession.sharedInstance()
+        let route = session.currentRoute
+        let ins = route.inputs.map { "\($0.portName)[\($0.portType.rawValue)]" }
+            .joined(separator: ",")
+        let outs = route.outputs.map { "\($0.portName)[\($0.portType.rawValue)]" }
+            .joined(separator: ",")
+        let hfpIn = route.inputs.contains { $0.portType == .bluetoothHFP }
+        let hfpOut = route.outputs.contains { $0.portType == .bluetoothHFP }
+        let hfpAvail = (session.availableInputs ?? [])
+            .contains { $0.portType == .bluetoothHFP }
+        DebugLog.shared.info(
+            "audio-route[\(context)] in=[\(ins.isEmpty ? "—" : ins)] "
+            + "out=[\(outs.isEmpty ? "—" : outs)] "
+            + "hfpIn=\(hfpIn) hfpOut=\(hfpOut) hfpAvailable=\(hfpAvail)"
+        )
+    }
+
     /// Re-assert the BT input/output preference for the CURRENT session
     /// without flipping the capture/playback direction flags. Called when
     /// an external event — e.g. `JWBleSession` finishing W300 HFP headset
@@ -250,6 +328,18 @@ public final class W300AudioBridge: ObservableObject {
         let session = AVAudioSession.sharedInstance()
         let onBluetooth = Self.preferBluetoothInput(on: session)
         Self.applyOutputRoute(on: session, bluetooth: onBluetooth)
+        let onHFP = session.currentRoute.inputs.contains {
+            $0.portType == .bluetoothHFP
+        }
+        if onHFP {
+            // The glasses HFP route is live — if capture is running on the
+            // iPhone mic, rebuild its tap so input follows the glasses.
+            if captureActive { captureRestartHandler?() }
+        } else {
+            // SDK says the headset is connected but iOS hasn't surfaced the
+            // HFP mic yet — poll for it.
+            scheduleHFPReacquire()
+        }
         refreshRoute()
     }
 
@@ -307,6 +397,30 @@ public final class W300AudioBridge: ObservableObject {
                 let session = AVAudioSession.sharedInstance()
                 let onBluetooth = Self.preferBluetoothInput(on: session)
                 Self.applyOutputRoute(on: session, bluetooth: onBluetooth)
+                let onHFP = session.currentRoute.inputs.contains {
+                    $0.portType == .bluetoothHFP
+                }
+                switch reason {
+                case .newDeviceAvailable, .routeConfigurationChange:
+                    if onHFP {
+                        // Glasses mic just came online mid-capture — move
+                        // the capture tap from the iPhone mic onto it.
+                        if captureActive { captureRestartHandler?() }
+                    } else {
+                        // Output may be up but the HFP mic is still
+                        // negotiating (it usually lands a beat later).
+                        scheduleHFPReacquire()
+                    }
+                case .oldDeviceUnavailable:
+                    // Glasses dropped — stop chasing the HFP route and let
+                    // voice fall back to the iPhone cleanly (rebuild the
+                    // capture tap onto the now-current iPhone mic).
+                    hfpReacquireTask?.cancel()
+                    if captureActive { captureRestartHandler?() }
+                default:
+                    break
+                }
+                logRoute("routeChange.\(reason.rawValue)")
             }
         }
         refreshRoute()

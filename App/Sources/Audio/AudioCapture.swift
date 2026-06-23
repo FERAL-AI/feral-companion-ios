@@ -15,6 +15,10 @@ public final class AudioCapture {
     private let targetFormat: AVAudioFormat
     private let chunkBytes: Int
     private var pendingPCM16: Data = Data()
+    /// Retained so the tap can be rebuilt against a new input route
+    /// (e.g. the glasses HFP mic arriving mid-capture) without the caller.
+    private var onChunkHandler: ChunkHandler?
+    private var running = false
 
     /// - Parameters:
     ///   - sampleRate: Output sample rate (default 24000).
@@ -33,14 +37,53 @@ public final class AudioCapture {
 
     public func start(onChunk: @escaping ChunkHandler) throws {
         // Phase 6 / audit-r8 brief #03: route AVAudioSession config
-        // through W300AudioBridge so capture + playback agree on
-        // category options (`.allowBluetooth` HFP + `.allowBluetoothA2DP`).
-        // Previously this method set its own options that omitted
-        // A2DP, which forced TTS through the narrowband HFP profile
-        // whenever the W300 was also being used as the mic.
+        // through W300AudioBridge so capture + playback agree on the
+        // session policy (HFP-only: `.allowBluetooth`, NO A2DP). Register
+        // a restart hook so the bridge can rebuild this tap onto the
+        // glasses HFP mic if that route arrives after we've already
+        // started on the iPhone mic (HFP surfaces ~0.5–1.5 s late).
         try MainActor.assumeIsolated {
             try W300AudioBridge.shared.activate(for: .capture)
+            W300AudioBridge.shared.captureRestartHandler = { [weak self] in
+                self?.restartInputCaptureIfRunning()
+            }
         }
+
+        self.onChunkHandler = onChunk
+        try buildEngineAndTap()
+        running = true
+    }
+
+    /// Rebuild the capture engine + tap + converter against the CURRENT
+    /// input route, WITHOUT touching the shared AVAudioSession (the bridge
+    /// owns session policy). Called by `W300AudioBridge` when the glasses
+    /// HFP mic surfaces — or drops — mid-capture, so input follows the
+    /// route. The hardware input format can change (e.g. iPhone 48 kHz →
+    /// HFP 48 kHz narrowband), so the `AVAudioConverter` is rebuilt too.
+    /// No-op if capture isn't running.
+    public func restartInputCaptureIfRunning() {
+        guard running, onChunkHandler != nil else { return }
+        inputNode?.removeTap(onBus: 0)
+        engine?.stop()
+        engine = nil
+        inputNode = nil
+        converter = nil
+        // Keep any partially-accumulated bytes from bleeding a format
+        // discontinuity into the next chunk.
+        pendingPCM16.removeAll(keepingCapacity: true)
+        do {
+            try buildEngineAndTap()
+        } catch {
+            #if DEBUG
+            print("[AudioCapture] restart on route change failed: \(error)")
+            #endif
+        }
+    }
+
+    /// Build the engine, converter, and tap from the input node's CURRENT
+    /// hardware format. Shared by `start()` and `restartInputCaptureIfRunning()`.
+    private func buildEngineAndTap() throws {
+        guard let onChunk = onChunkHandler else { return }
 
         let engine = AVAudioEngine()
         let input = engine.inputNode
@@ -48,7 +91,7 @@ public final class AudioCapture {
 
         // Build a converter from the hardware format to our 24 kHz
         // PCM16 target. AVAudioConverter handles arbitrary input
-        // rates including the 48 kHz default on iPhone.
+        // rates including the 48 kHz default on iPhone and the HFP mic.
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
             throw NSError(
                 domain: "AudioCapture",
@@ -59,7 +102,6 @@ public final class AudioCapture {
         self.converter = converter
         self.engine = engine
         self.inputNode = input
-        self.pendingPCM16.removeAll(keepingCapacity: true)
 
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             guard let self else { return }
@@ -80,6 +122,8 @@ public final class AudioCapture {
     }
 
     public func stop() {
+        running = false
+        onChunkHandler = nil
         inputNode?.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
@@ -87,6 +131,9 @@ public final class AudioCapture {
         converter = nil
         pendingPCM16.removeAll(keepingCapacity: false)
         Task { @MainActor in
+            // Drop the restart hook before deactivating so a late route
+            // change can't resurrect a torn-down capture.
+            W300AudioBridge.shared.captureRestartHandler = nil
             W300AudioBridge.shared.deactivate(for: .capture)
         }
     }

@@ -41,6 +41,13 @@ public final class JWBleSession: ObservableObject {
     @Published public private(set) var phase: Phase = .idle
     @Published public private(set) var discovered: [Discovered] = []
 
+    /// User-facing hint for the Classic-Bluetooth HFP *audio* pairing — a
+    /// SEPARATE pairing from the BLE health bond. Set when we pop the iOS
+    /// Bluetooth dialog (`jwHeadphonePairing`) so the UI can say "tap Pair";
+    /// cleared once the HFP route is live (status 3/4) or on disconnect.
+    /// `nil` means no audio-pairing action is pending.
+    @Published public private(set) var audioPairingHint: String?
+
     /// True when the proprietary JWBle.framework is linked into this build.
     public static var isSDKAvailable: Bool {
         #if canImport(JWBle)
@@ -215,6 +222,7 @@ extension JWBleSession {
         case .timeOutDisconnect:
             DebugLog.shared.warning("jwble: TimeOutDisconnect — BLE comm timed out")
             audioSetupDone = false
+            audioPairingHint = nil
             phase = .failed(reason: "Communication timeout — glasses disconnected")
             emitGlassesStatus("disconnected", extra: ["reason": .string("timeout_disconnect")])
 
@@ -236,6 +244,7 @@ extension JWBleSession {
         case .disConnect:
             DebugLog.shared.warning("jwble: status=DisConnect")
             audioSetupDone = false
+            audioPairingHint = nil
             if case .ready = phase {
                 phase = .failed(reason: "Glasses disconnected")
                 emitGlassesStatus(
@@ -342,6 +351,8 @@ extension JWBleSession {
                     DebugLog.shared.info(
                         "jwble: initiating headphone pairing (iOS Bluetooth dialog)"
                     )
+                    self.audioPairingHint =
+                        "Tap “Pair” on the iPhone Bluetooth dialog to route voice through your glasses."
                     JWBleAction.jwHeadphonePairing()
                 }
             }
@@ -364,6 +375,7 @@ extension JWBleSession {
             DebugLog.shared.info("jwble: headphone status=\(st) paired=\(paired)")
             // 0=shutdown 1=pairing 2=ready 3=connected 4=connected-to-phone
             if st == 3 || st == 4 {
+                self.audioPairingHint = nil
                 W300AudioBridge.shared.reassertRouteIfActive()
                 self.emitGlassesStatus("audio_ready", extra: [
                     "headphone_status": .string("\(st)"),
@@ -420,6 +432,7 @@ extension JWBleSession {
     fileprivate func disconnectSDK() {
         JWBleAction.jwDisConnect()
         audioSetupDone = false
+        audioPairingHint = nil
         phase = .idle
         DebugLog.shared.info("jwble: disconnect called")
     }

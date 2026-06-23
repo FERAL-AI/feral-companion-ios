@@ -103,8 +103,10 @@ public final class AudioPlayback {
         }
 
         // Phase 6 / audit-r8 brief #03: route session config through
-        // W300AudioBridge so capture + playback share `.allowBluetoothA2DP`
-        // (high-quality output) and the bridge knows we're playing.
+        // W300AudioBridge so capture + playback share ONE HFP-only voice
+        // session and the bridge knows we're playing. Playback never
+        // re-adds A2DP or overrides output — it follows the bridge's HFP
+        // route so TTS plays out the glasses speaker (not the iPhone).
         try W300AudioBridge.shared.activate(for: .playback)
 
         guard let inputFormat = makeInputFormat(sampleRate: sampleRate) else { return }
