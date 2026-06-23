@@ -260,6 +260,22 @@ public final class BrainClient: ObservableObject {
                 DebugLog.shared.error("connect: \(message) — tearing down socket")
                 await disconnect()
                 state = .failed(message: message)
+            } else {
+                // HUP self-describing peripherals: tell the brain what the
+                // bridged glasses / wristband can do so they appear in the
+                // fleet as full device cards with zero brain code. Best-effort
+                // — a failure here must never break the chat/voice session.
+                do {
+                    try await node.sendPeripheralBridgeRegister(
+                        bridgeId: nodeId,
+                        platform: "ios",
+                        devices: PeripheralManifests.bridgeDevices()
+                    )
+                } catch {
+                    DebugLog.shared.info(
+                        "peripheral_bridge_register skipped: \(error.localizedDescription)"
+                    )
+                }
             }
         } catch {
             state = .failed(message: error.localizedDescription)

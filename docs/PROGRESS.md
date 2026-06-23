@@ -50,3 +50,17 @@ Tomorrow: Phase 3 (BrainClient wrapper around FeralNode + Pairing + TabView shel
 
 - Phase 3 → Phase 7 work above.
 - Apple Developer team setup for real-device deploy (`DEVELOPMENT_TEAM` Xcode setting).
+
+## Hardware fleet view + self-describing bridged peripherals
+
+Brain-driven fleet visibility on the Devices tab, plus HUP manifests for phone-bridged BLE peripherals.
+
+| Component | Path | What it does |
+| --- | --- | --- |
+| `FleetStore` | `App/Sources/State/FleetStore.swift` | Polls `GET /api/hardware/fleet` on the brain; parses devices, capabilities, and last verification (honesty) state. |
+| `FleetSection` | `App/Sources/Views/FleetSection.swift` | Server-driven device cards in the Devices tab — safety badges + live honesty strip. Additive to `DeviceStore` local pairing rows. |
+| `PeripheralManifests` | `App/Sources/State/PeripheralManifests.swift` | Declarative manifests for Theora W300, W610 Open glasses, and Veepoo wristband. |
+| `BrainClient` connect hook | `App/Sources/Brain/BrainClient.swift` | On `node_ack`, sends `PeripheralManifests.bridgeDevices()` via `sendPeripheralBridgeRegister`. |
+| SDK helper | `Sources/FeralNodeSDK/FeralNode.swift` | `sendPeripheralBridgeRegister(bridgeId:platform:devices:)` → HUP `peripheral_bridge_register`. |
+
+**Contributor note:** the Xcode project is xcodegen-generated from `project.yml`. After adding Swift files, run `./scripts/bootstrap.sh` or `xcodegen generate` before building. `App/Sources/` and `Sources/FeralNodeSDK/` share one target — app files must not `import FeralNodeSDK`.

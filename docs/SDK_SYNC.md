@@ -38,6 +38,16 @@ git commit -m "chore(sdk): sync FeralNodeSDK from ASOS@<sha>"
 
 **Never modify `Sources/FeralNodeSDK/` files in this repo directly.** All changes flow through ASOS first. The vendored copy is read-only.
 
+## App-side SDK helpers in use
+
+The companion app calls these `FeralNode` methods (sync them from ASOS when upgrading):
+
+| Method | HUP frame | Used by |
+| --- | --- | --- |
+| `sendPeripheralBridgeRegister(bridgeId:platform:devices:expiresAt:)` | `peripheral_bridge_register` | `BrainClient` on connect — registers self-describing manifests from `PeripheralManifests.bridgeDevices()` so bridged glasses/wristband appear in the brain's fleet with zero brain-side per-device code. |
+
+When syncing a new SDK drop, verify this helper (and any related payload types such as `AnyCodable`) are present in the vendored copy before building.
+
 ## Why we vendor instead of using SwiftPM
 
 `ios-node-sdk` lives inside the ASOS monorepo as a sub-directory. SwiftPM does not support a sub-directory of a Git repo as a package source without restructuring ASOS. Two real options:

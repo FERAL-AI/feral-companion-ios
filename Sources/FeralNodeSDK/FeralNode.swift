@@ -270,6 +270,33 @@ public actor FeralNode {
         try await socket.send(HUPFrame(type: "device_announce", payload: payload))
     }
 
+    /// Register one or more SELF-DESCRIBING peripherals reached through this
+    /// phone bridge (glasses, wristband, …). Unlike ``sendDeviceAnnounce``
+    /// (observation-only discovery), each device here carries a full HUP
+    /// ``manifest`` with its control surface (``capabilities[]`` in
+    /// DeviceCapability shape, including any closed-loop ``verify`` contract).
+    /// The brain wires a bridge adapter + generates LLM tools, safety, and the
+    /// honesty loop from the manifest alone — no per-device brain code.
+    ///
+    /// `devices` entries: ``{device_id, kind, protocol, manifest}`` where
+    /// `manifest` is a DeviceManifest dict. See `ASOS/feral-core/api/server.py`
+    /// `peripheral_bridge_register`.
+    public func sendPeripheralBridgeRegister(
+        bridgeId: String,
+        platform: String,
+        devices: [[String: AnyCodable]],
+        expiresAt: String = ""
+    ) async throws {
+        guard let socket, connected else { throw FeralNodeError.notConnected }
+        let payload: [String: AnyCodable] = [
+            "bridge_id": .string(bridgeId),
+            "platform": .string(platform),
+            "expires_at": .string(expiresAt),
+            "devices": .array(devices.map { .object($0) }),
+        ]
+        try await socket.send(HUPFrame(type: "peripheral_bridge_register", payload: payload))
+    }
+
     // MARK: - HUP v1.3 phone-as-peer envelopes
     //
     // The brain accepts these top-level types on /v1/node from a

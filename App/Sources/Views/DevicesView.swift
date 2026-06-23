@@ -21,6 +21,13 @@ struct DevicesView: View {
             // app didn't surface the brain's network of nodes.
             BrainNetworkSection()
 
+            // HUP fleet — server-driven device cards for every
+            // self-describing device the brain controls (robot, glasses,
+            // wristband, …), with safety badges + the live honesty loop.
+            // Built entirely from `/api/hardware/fleet`; a new device
+            // appears automatically with zero app code.
+            FleetSection()
+
             // Phase 6 / audit-r8 brief #03 — show the live audio
             // route so the user sees whether voice is actually
             // routed via the W300 vs the iPhone speaker. No more

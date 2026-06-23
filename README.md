@@ -2,7 +2,7 @@
 
 Vendor-pluggable iOS companion app for the FERAL AI brain. Pairs with any FERAL brain over the HUP WebSocket protocol and exposes a uniform UI for chat, voice, and live health sensors regardless of which physical device the user has on their face or wrist.
 
-> **Status:** scaffold (2026-05-05). Day 1 — Phase 1 + 2 complete: app builds, connects to brain, no UI yet. See `docs/PROGRESS.md`.
+> **Status:** active development. App builds, connects to brain, and exposes a Devices tab with brain-driven hardware fleet cards plus local adapter pairing. See `docs/PROGRESS.md`.
 
 ## Why this exists
 
@@ -30,6 +30,29 @@ The result: a phone app that supports any current and future hardware via a sing
 
 The brain is device-agnostic. Adapters are device-specific. The app shell is both.
 
+### Devices tab — two complementary views
+
+The **Devices** tab (`DevicesView`) combines brain-driven fleet visibility with local phone-side pairing. They are additive; neither replaces the other.
+
+| Layer | Source | Purpose |
+| --- | --- | --- |
+| **Hardware fleet** | Brain `GET /api/hardware/fleet` via `FleetStore` | Server-driven cards for every self-describing device the brain controls — robots, bridged glasses, wristbands, anything that registers a manifest. Rendered by `FleetSection`. |
+| **Local adapters** | `DeviceStore` catalog | Phone-side BLE pairing and activation (W300 glasses audio, Veepoo scan/connect, HealthKit, iPhone built-ins). Unchanged by the fleet view. |
+
+**`FleetStore`** (`App/Sources/State/FleetStore.swift`) polls `/api/hardware/fleet` on the connected brain every ~5 s while the Devices tab is open. It parses each device's capabilities and the last verification (honesty) state into `FleetDevice` / `FleetCapability` / `FleetVerification` models.
+
+**`FleetSection`** (`App/Sources/Views/FleetSection.swift`) renders those models as cards entirely from the brain response — device name/type, capability list, safety badges (`SAFE` / `CONFIRM` / `APPROVAL` / `READ` / `IRREVERSIBLE`), and a live honesty strip (`verified ✓` / `verified ✗` / unverified). A brand-new device the brain learns about appears as a card automatically; no app code change required.
+
+### Self-describing bridged peripherals
+
+When the phone connects to a brain, **`BrainClient`** sends HUP self-description manifests for phone-bridged BLE peripherals via `FeralNode.sendPeripheralBridgeRegister(...)` (`peripheral_bridge_register`). The manifests live in **`PeripheralManifests`** (`App/Sources/State/PeripheralManifests.swift`) and cover:
+
+- **Theora W300** glasses (`theora-w300`)
+- **W610 Open** glasses (`w610-open`) — the "unknown device, zero code" proof; same declarative path, no brain-side per-device code
+- **Veepoo** wristband (`veepoo-band`)
+
+The brain builds LLM tools, safety policy, fleet cards, and closed-loop honesty checks from these manifests alone. Registration is best-effort — a failure never breaks chat/voice.
+
 ## Adapter status
 
 | Adapter | Status | Hardware needed | First demo |
@@ -45,12 +68,19 @@ The brain is device-agnostic. Adapters are device-specific. The app shell is bot
 
 ```bash
 brew install xcodegen
-./scripts/bootstrap.sh   # always run after switching branches
+./scripts/bootstrap.sh   # always run after switching branches or adding Swift files
 ./scripts/check-vendor.sh  # optional: see which SDKs are present
 open FeralCompanion.xcodeproj
 ```
 
-`FeralCompanion.xcodeproj` is **gitignored** and regenerated from `project.yml`. If Xcode reports *"Build input files cannot be found"* for Swift files that are not on disk, your local `.xcodeproj` is stale — run `./scripts/bootstrap.sh` and rebuild.
+`FeralCompanion.xcodeproj` is **gitignored** and regenerated from `project.yml`. Run `./scripts/bootstrap.sh` (or `xcodegen generate`) whenever you:
+
+- switch branches, or
+- **add new Swift files** under `App/Sources/` or `Sources/FeralNodeSDK/`
+
+Without regenerating, Xcode fails with *"Cannot find \<Type\> in scope"* or *"Build input files cannot be found"* because the generated project does not yet list the new files.
+
+`App/Sources/` and `Sources/FeralNodeSDK/` compile into the **same** `FeralCompanion` target (see `project.yml`). App code must **not** `import FeralNodeSDK` — types like `FeralNode` and `AnyCodable` are visible directly.
 
 To build for a real iPhone you need an Apple Developer team configured in Xcode signing.
 
