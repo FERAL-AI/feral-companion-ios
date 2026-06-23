@@ -64,10 +64,12 @@ public final class JWBleSession: ObservableObject {
     /// don't re-pop the iOS Bluetooth pairing dialog on every status
     /// callback. Reset on disconnect so a reconnect re-enables glasses audio.
     private var audioSetupDone = false
-    /// How many times we've fired the headset-pairing sequence this
+    /// How many times we've fired the auto headset-pairing sequence this
     /// connection. The watchdog retries once if the glasses don't enter
-    /// PAIRING/READY/CONNECTED after the first attempt (a dropped command).
+    /// PAIRING/CONNECTED after the first attempt (a dropped command).
     private var headsetPairingAttempts = 0
+    /// Monotonic counter for user-initiated pairing taps (debug logging only).
+    private var manualPairingAttempts = 0
     private static let lastPeripheralKey = "feral.jwble.lastPeripheralUUID"
     private weak var boundNode: FeralNode?
 
@@ -153,6 +155,18 @@ public final class JWBleSession: ObservableObject {
         phase = .idle
         #endif
     }
+
+    /// User-initiated classic-Bluetooth HFP pairing (mirrors the reference
+    /// app's "Pair Glasses Audio" button). Always allowed while the BLE link
+    /// is up — does not consult `audioSetupDone`, so the operator can retry
+    /// after a missed auto-trigger or dismissed iOS dialog.
+    public func requestHeadsetPairing() {
+        #if canImport(JWBle)
+        requestHeadsetPairingSDK()
+        #else
+        DebugLog.shared.warning("jwble: requestHeadsetPairing — SDK not installed")
+        #endif
+    }
 }
 
 #if canImport(JWBle)
@@ -227,6 +241,7 @@ extension JWBleSession {
             DebugLog.shared.warning("jwble: TimeOutDisconnect — BLE comm timed out")
             audioSetupDone = false
             headsetPairingAttempts = 0
+            manualPairingAttempts = 0
             audioPairingHint = nil
             phase = .failed(reason: "Communication timeout — glasses disconnected")
             emitGlassesStatus("disconnected", extra: ["reason": .string("timeout_disconnect")])
@@ -250,6 +265,7 @@ extension JWBleSession {
             DebugLog.shared.warning("jwble: status=DisConnect")
             audioSetupDone = false
             headsetPairingAttempts = 0
+            manualPairingAttempts = 0
             audioPairingHint = nil
             if case .ready = phase {
                 phase = .failed(reason: "Glasses disconnected")
@@ -377,25 +393,56 @@ extension JWBleSession {
             return
         }
 
-        triggerHeadsetPairingSDK()
+        triggerHeadsetPairingSDK(source: .auto)
+    }
+
+    fileprivate enum PairingSource {
+        case auto
+        case manual
+    }
+
+    /// User button — always fires when the BLE link is up, regardless of
+    /// `audioSetupDone`. Mirrors the reference `pairGlassesAudio()` path.
+    fileprivate func requestHeadsetPairingSDK() {
+        guard JWBleManager.shareInstance().isConnected else {
+            DebugLog.shared.warning(
+                "jwble: manual pairing aborted — BLE link not connected"
+            )
+            return
+        }
+        manualPairingAttempts += 1
+        DebugLog.shared.info(
+            "jwble: [manual \(manualPairingAttempts)] user requested headset pairing"
+        )
+        triggerHeadsetPairingSDK(source: .manual)
     }
 
     /// Fire one deferred headset-pairing attempt (settle → audio-enable →
     /// pair → watchdog). Separated out so the watchdog can re-invoke it.
-    fileprivate func triggerHeadsetPairingSDK() {
-        headsetPairingAttempts += 1
-        let attempt = headsetPairingAttempts
+    fileprivate func triggerHeadsetPairingSDK(source: PairingSource) {
+        let attempt: Int
+        let label: String
+        switch source {
+        case .auto:
+            headsetPairingAttempts += 1
+            attempt = headsetPairingAttempts
+            label = "attempt \(attempt)"
+        case .manual:
+            attempt = manualPairingAttempts
+            label = "manual \(attempt)"
+        }
         self.audioPairingHint =
             "Tap “Pair” on the iPhone Bluetooth dialog to route voice through your glasses."
 
         Task { @MainActor [weak self] in
-            // 1. Let the post-connect command burst drain so our pairing
-            //    command isn't dropped on the serialized GATT link.
-            try? await Task.sleep(nanoseconds: 1_200_000_000) // 1.2 s
+            // 1. Let the post-connect command burst drain (auto) or give the
+            //    link a short settle window (manual tap while idle).
+            let settleNs: UInt64 = source == .manual ? 400_000_000 : 1_200_000_000
+            try? await Task.sleep(nanoseconds: settleNs)
             guard let self = self else { return }
             guard JWBleManager.shareInstance().isConnected else {
                 DebugLog.shared.warning(
-                    "jwble: pairing attempt \(attempt) aborted — link no longer connected"
+                    "jwble: [\(label)] aborted — link no longer connected"
                 )
                 return
             }
@@ -404,33 +451,34 @@ extension JWBleSession {
             //    so it advertises for pairing. (Not in the reference, but
             //    harmless if already on; see doc comment.)
             DebugLog.shared.info(
-                "jwble: [attempt \(attempt)] enabling glasses audio chip (jwAudioAction open=true)"
+                "jwble: [\(label)] enabling glasses audio chip (jwAudioAction open=true)"
             )
             JWBleAction.jwAudioAction(false, open: true) { [weak self] status, open in
                 Task { @MainActor [weak self] in
                     guard let self = self else { return }
                     DebugLog.shared.info(
-                        "jwble: [attempt \(attempt)] jwAudioAction result status=\(status.rawValue) open=\(open)"
+                        "jwble: [\(label)] jwAudioAction result status=\(status.rawValue) open=\(open)"
                     )
                     guard JWBleManager.shareInstance().isConnected else { return }
 
                     // 3. Initiate headset pairing — pops the iOS dialog.
                     DebugLog.shared.info(
-                        "jwble: [attempt \(attempt)] initiating headphone pairing (iOS Bluetooth dialog)"
+                        "jwble: [\(label)] initiating headphone pairing (iOS Bluetooth dialog)"
                     )
                     JWBleAction.jwHeadphonePairing()
 
-                    // 4. Watchdog: retry once if the glasses don't advance
-                    //    out of SHUTDOWN within ~5 s.
-                    self.scheduleHeadsetPairingWatchdogSDK(forAttempt: attempt)
+                    // 4. Watchdog: auto path retries once if no real progress.
+                    if source == .auto {
+                        self.scheduleHeadsetPairingWatchdogSDK(forAttempt: attempt)
+                    }
                 }
             }
         }
     }
 
-    /// If, ~5 s after attempt `attempt`, the glasses are still SHUTDOWN(0)
-    /// and not paired, the pairing command was almost certainly dropped —
-    /// retry exactly once. Bounded by `headsetPairingAttempts <= 2`.
+    /// If, ~5 s after attempt `attempt`, the glasses haven't entered PAIRING
+    /// or finished HFP bond, the pairing command was almost certainly dropped
+    /// — retry exactly once. READY(2) alone is NOT success (chip on, not paired).
     fileprivate func scheduleHeadsetPairingWatchdogSDK(forAttempt attempt: Int) {
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 s
@@ -442,7 +490,7 @@ extension JWBleSession {
             let model = JWBleManager.shareInstance().connectionModel
             let st = model.headphoneDeviceStatus
             let paired = model.headsetPaired
-            if paired || st >= 1 {
+            if paired || st == 1 || st >= 3 {
                 DebugLog.shared.info(
                     "jwble: [attempt \(attempt)] watchdog OK — headphoneStatus=\(st) paired=\(paired)"
                 )
@@ -451,14 +499,16 @@ extension JWBleSession {
             guard attempt < 2 else {
                 DebugLog.shared.warning(
                     "jwble: headset pairing did not start after \(attempt) attempts "
-                    + "(headphoneStatus=\(st)). Pair manually from iOS Settings → Bluetooth."
+                    + "(headphoneStatus=\(st), paired=\(paired)). "
+                    + "Tap “Pair glasses audio” on the Devices tab to retry."
                 )
                 return
             }
             DebugLog.shared.warning(
-                "jwble: [attempt \(attempt)] no headset-pairing progress (status=\(st)) — retrying once"
+                "jwble: [attempt \(attempt)] no headset-pairing progress "
+                + "(status=\(st), paired=\(paired)) — retrying once"
             )
-            self.triggerHeadsetPairingSDK()
+            self.triggerHeadsetPairingSDK(source: .auto)
         }
     }
 
@@ -555,6 +605,7 @@ extension JWBleSession {
         JWBleAction.jwDisConnect()
         audioSetupDone = false
         headsetPairingAttempts = 0
+        manualPairingAttempts = 0
         audioPairingHint = nil
         phase = .idle
         DebugLog.shared.info("jwble: disconnect called")

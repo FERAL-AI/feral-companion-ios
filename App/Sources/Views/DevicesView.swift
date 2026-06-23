@@ -29,8 +29,22 @@ struct DevicesView: View {
             Section {
                 AudioRouteRow(snapshot: audioBridge.currentRoute,
                               lastReason: audioBridge.lastRouteChangeReason)
+                if case .ready = glasses.phase {
+                    HStack {
+                        Spacer()
+                        Button("Pair glasses audio") {
+                            glasses.requestHeadsetPairing()
+                        }
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(FeralTheme.accentSoft, in: Capsule())
+                        .foregroundStyle(FeralTheme.accent)
+                        Spacer()
+                    }
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                }
                 if let hint = glasses.audioPairingHint {
-                    Label(hint, systemImage: "exclamationmark.triangle.fill")
+                    Text(hint)
                         .font(.caption)
                         .foregroundStyle(FeralTheme.stateLive)
                 }
