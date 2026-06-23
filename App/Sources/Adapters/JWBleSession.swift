@@ -321,42 +321,42 @@ extension JWBleSession {
         JWBleAction.jwConnectDevice(entry.sdkModel)
     }
 
-    /// After the glasses reach `.ready`, switch them into classic-Bluetooth
-    /// headset mode so iOS exposes a `.bluetoothHFP` route (mic + speaker).
-    /// Without this the W300 stays a BLE-sensors-only peripheral and voice
-    /// keeps using the iPhone mic/speaker (the "audio stuck on phone" bug).
+    /// After the glasses reach `.ready`, put them into classic-Bluetooth
+    /// headset pairing mode so iOS exposes a `.bluetoothHFP` route (mic +
+    /// speaker). Without this the W300 stays a BLE-sensors-only peripheral
+    /// and voice keeps using the iPhone mic/speaker (the "audio stuck on
+    /// phone" bug).
     ///
-    /// Sequence mirrors the vendor reference: enable the audio function
-    /// (`jwAudioAction open:YES`), then — only if the headset hasn't been
-    /// paired before — kick `jwHeadphonePairing` which pops the iOS
-    /// Bluetooth pairing dialog. One-shot per connection (`audioSetupDone`).
+    /// This mirrors the proven Theora reference
+    /// (`OpenAIRealtimeManager.pairGlassesAudio` →
+    /// `BLEBridgeObjC.initiateHeadphonePairing` → `JWBleAction
+    /// jwHeadphonePairing`): a SINGLE call to `jwHeadphonePairing()` is
+    /// what pops the iOS Bluetooth dialog. The reference does NOT pre-
+    /// flight a `jwAudioAction(open:YES)` — that extra step toggles
+    /// glasses-side audio state mid-pairing and is the historical cause
+    /// of the iOS HFP route never surfacing on first connect. If the
+    /// headset is already paired we just nudge `W300AudioBridge` so any
+    /// active voice session immediately follows the glasses route.
+    /// One-shot per connection (`audioSetupDone`).
     fileprivate func enableGlassesAudioSDK() {
         guard !audioSetupDone else { return }
         audioSetupDone = true
 
-        DebugLog.shared.info("jwble: enabling glasses audio (jwAudioAction open=true)")
-        JWBleAction.jwAudioAction(false, open: true) { [weak self] status, open in
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                DebugLog.shared.info(
-                    "jwble: jwAudioAction result status=\(status.rawValue) open=\(open)"
-                )
-                let alreadyPaired = JWBleManager.shareInstance().connectionModel.headsetPaired
-                if alreadyPaired {
-                    DebugLog.shared.info(
-                        "jwble: headset already paired — re-asserting audio route"
-                    )
-                    self.readHeadphoneStatusAfterDelaySDK()
-                } else {
-                    DebugLog.shared.info(
-                        "jwble: initiating headphone pairing (iOS Bluetooth dialog)"
-                    )
-                    self.audioPairingHint =
-                        "Tap “Pair” on the iPhone Bluetooth dialog to route voice through your glasses."
-                    JWBleAction.jwHeadphonePairing()
-                }
-            }
+        let alreadyPaired = JWBleManager.shareInstance().connectionModel.headsetPaired
+        if alreadyPaired {
+            DebugLog.shared.info(
+                "jwble: headset already paired — re-asserting audio route"
+            )
+            self.readHeadphoneStatusAfterDelaySDK()
+            return
         }
+
+        DebugLog.shared.info(
+            "jwble: initiating headphone pairing (iOS Bluetooth dialog)"
+        )
+        self.audioPairingHint =
+            "Tap “Pair” on the iPhone Bluetooth dialog to route voice through your glasses."
+        JWBleAction.jwHeadphonePairing()
     }
 
     /// The SDK updates `connectionModel` asynchronously AFTER the
