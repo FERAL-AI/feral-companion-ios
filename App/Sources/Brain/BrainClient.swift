@@ -598,7 +598,28 @@ public final class BrainClient: ObservableObject {
             isAssistantSpeaking = false
 
         case "error":
-            if case .string(let msg) = frame.payload["message"] ?? .null {
+            // A brain `error` frame is NOT automatically fatal. Per-envelope
+            // validation rejections (HUP §8 `bad_payload` / `bad_schema`,
+            // and anything the brain marks `recoverable`) must not tear the
+            // whole session down — doing so was the root cause of the
+            // "reconnecting forever" pairing loop: the brain rejected the
+            // `peripheral_bridge_register` payload, the app flipped to
+            // `.failed`, ConnectionStore mapped that to `.reconnecting` and
+            // re-dialed, which re-sent the same bad register → loop. We now
+            // only treat genuinely fatal errors as connection failures and
+            // log the rest so the live WS (chat/voice) keeps working.
+            let msg = stringField(frame.payload["message"]) ?? "brain error"
+            let name = stringField(frame.payload["name"]) ?? ""
+            let recoverable: Bool = {
+                if case .bool(let b) = frame.payload["recoverable"] ?? .null { return b }
+                return false
+            }()
+            let perEnvelopeNames: Set<String> = ["bad_payload", "bad_schema"]
+            if recoverable || perEnvelopeNames.contains(name) {
+                DebugLog.shared.error(
+                    "brain error frame (non-fatal, name=\(name)): \(msg)"
+                )
+            } else {
                 state = .failed(message: msg)
             }
 

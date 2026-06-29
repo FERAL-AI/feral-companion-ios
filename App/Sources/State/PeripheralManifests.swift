@@ -28,7 +28,7 @@ public enum PeripheralManifests {
         deviceEntry(
             deviceId: "theora-w300",
             kind: "glasses",
-            proto: "ble",
+            proto: "native_bridge",
             manifest: manifest(
                 deviceId: "theora-w300",
                 deviceType: "glasses",
@@ -66,7 +66,7 @@ public enum PeripheralManifests {
         deviceEntry(
             deviceId: "w610-open",
             kind: "glasses",
-            proto: "ble",
+            proto: "native_bridge",
             manifest: manifest(
                 deviceId: "w610-open",
                 deviceType: "glasses",
@@ -96,8 +96,8 @@ public enum PeripheralManifests {
     static func veepooWristband() -> [String: AnyCodable] {
         deviceEntry(
             deviceId: "veepoo-band",
-            kind: "wristband",
-            proto: "ble",
+            kind: "band",
+            proto: "native_bridge",
             manifest: manifest(
                 deviceId: "veepoo-band",
                 deviceType: "wristband",
