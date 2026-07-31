@@ -33,6 +33,14 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>44</string>
+	<!-- The HUP protocol version this build speaks. Mirrors
+	     Sources/FeralNodeSDK/Info.swift `hupVersion` and the brain's
+	     canonical HUP_VERSION; surfacing it in the plist lets an operator
+	     verify a mismatched build from the installed bundle without
+	     launching the app. ASOS test_hup_version_unified.py enforces the
+	     match whenever this repo is checked out beside ASOS. -->
+	<key>FERALHUPVersion</key>
+	<string>1.3.0</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSAppTransportSecurity</key>
